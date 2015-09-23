@@ -1,16 +1,17 @@
-import Control.Monad (filterM)
+import Control.Monad (filterM, liftM)
 import Control.Exception (catch, SomeException)
 import System.Directory (renameFile, removeFile, doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (ExitCode(..))
-import System.FilePath (replaceBaseName, hasExtension)
+import System.FilePath (replaceBaseName, hasExtension, takeBaseName)
 import System.IO (hPutStrLn, stderr)
 import System.Process (createProcess, waitForProcess, shell)
 
 main :: IO ()
-main = do
-  args <- getArgs
-  mapM_ redo args
+--main = do
+--  args <- getArgs
+--  mapM_ redo args
+main = mapM_ redo =<< getArgs
 
 redo :: String -> IO ()
 redo target = do 
@@ -20,7 +21,11 @@ redo target = do
   case path of
     Nothing -> error $ "No .do file found for target '" ++ target ++ "'"
     Just path -> do
-      let command = "sh " ++ path ++ " - - " ++ tmp3 ++ " > " ++ tmpStdout
+      -- Pass redo script 3 arguments:
+      -- $1 - the target name
+      -- $2 - the target basename
+      -- $3 - the temporary target name
+      let command = "sh " ++ path ++ " " ++ target ++ " " ++ takeBaseName target ++ " " ++ tmp3 ++ " > " ++ tmpStdout
       (_, _, _, processHandle) <- createProcess $ shell $ command
       exit <- waitForProcess processHandle
       case exit of  
@@ -45,9 +50,9 @@ redo target = do
 
 -- Take file path of target and return file path of redo script:
 redoPath :: FilePath -> IO (Maybe FilePath)
-redoPath target = do 
-  existingCandidates <- filterM doesFileExist candidates
-  return $ safeHead existingCandidates
-  where candidates =  [target ++ ".do"] ++ if hasExtension target then [replaceBaseName target "default.do"] else []
+redoPath target = safeHead `liftM` filterM doesFileExist candidates
+ -- existingCandidates <- filterM doesFileExist candidates
+  --return $ safeHead existingCandidates
+  where candidates =  [target ++ ".do"] ++ if hasExtension target then [replaceBaseName target "default" ++ ".do"] else []
         safeHead [] = Nothing
         safeHead (x:_) = Just x
