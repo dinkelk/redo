@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Dependencies:
-redo-ifchange redo.hs
+redo-ifchange redo.hs README.txt
 
 # Compile redo.hs to filename $3 with verbosity set to low 
 # so there is nothing printed to standard out

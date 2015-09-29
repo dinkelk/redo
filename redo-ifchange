@@ -1,8 +1,6 @@
 #!/bin/sh
 
-echo $REDO_TARGET $@ 1>&2
 for dependency in $@
 do
-  mkdir -p ".redo/$REDO_TARGET"
   md5 -q $dependency > ".redo/$REDO_TARGET/$dependency"
 done
