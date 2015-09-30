@@ -8,11 +8,10 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5) 
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe)
-import Data.Typeable (typeOf)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing)
-import System.Environment (getArgs, getEnvironment)
+import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>))
 import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..))
@@ -28,22 +27,42 @@ deriving instance Show CreateProcess
 deriving instance Show StdStream
 deriving instance Show CmdSpec
 
+-- Some global defines:
+metaDir = ".redo"
+
 main :: IO ()
 --main = do
 --  args <- getArgs
 --  mapM_ redo args
-main = mapM_ redo =<< getArgs
+main = do 
+  mapM_ redo =<< getArgs
+  progName <- getProgName
+  redoTarget' <- lookupEnv "REDO_TARGET"
+  -- if the program name is redo-ifchange, then update the dependency hashes:
+  case (progName, redoTarget') of
+    ("redo-ifchange", Just redoTarget) -> mapM_ (writeMD5 redoTarget) =<< getArgs
+    ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
+    _ -> return ()
+  where writeMD5 target dep = writeFile (metaDir </> target </> dep ) =<< md5File dep
 
 redo :: String -> IO ()
-redo target = do 
-  upToDate' <- upToDate target metaDepsDir
-  unless upToDate' $ maybe printMissingPath redo' =<< redoPath target
+redo target = do
+  -- hPutStrLn stderr $ "... redoing " ++ target
+  exists <- doesFileExist target
+  if exists then 
+    -- The following can probably be improved:
+    (do upToDate' <- upToDate metaDepsDir
+        unless upToDate' $ maybe missingDo redo' =<< redoPath target)
+    else maybe missingDo redo' =<< redoPath target
   where
-    printMissingPath = error $ "No .do file found for target '" ++ target ++ "'"
+    missingDo = do
+      exists <- doesFileExist target
+      unless exists $ error $ "No .do file found for target '" ++ target ++ "'"
     redo' :: FilePath -> IO ()
     redo' path = do
+      hPutStrLn stderr $ "redo " ++ target
       -- Create meta data folder:
-      catchJust (\e -> guard $ isDoesNotExistError e)
+      catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
                 (\_ -> return())
       createDirectoryIfMissing True metaDepsDir 
@@ -55,13 +74,13 @@ redo target = do
       (_, _, _, processHandle) <- createProcess $ (shell $ command path) {env = Just newEnv}
       exit <- waitForProcess processHandle
       case exit of  
-        ExitSuccess -> do catch (renameFile tmp3 target) handler1
-        ExitFailure code -> do hPutStrLn stderr $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
+        ExitSuccess -> catch (renameFile tmp3 target) handler1
+        ExitFailure code -> hPutStrLn stderr $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
       -- Remove the temporary files:
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout
     -- Dependency meta data directory for storing md5 hashes 
-    metaDepsDir = ".redo" </> target
+    metaDepsDir = metaDir </> target
     -- Temporary file names:
     tmp3 = target ++ ".redo-tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
     tmpStdout = target ++ ".redo-tmp2" -- this temp file captures what gets written to stdout
@@ -72,10 +91,10 @@ redo target = do
     command path = unwords ["sh", path, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
-    handler1 ex = do catch (renameFile tmpStdout target) handler2
+    handler1 ex = catch (renameFile tmpStdout target) handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
-    handler2 ex = do hPutStrLn stderr $ "Redo could not copy results from temporary file"
+    handler2 ex = hPutStrLn stderr "Redo could not copy results from temporary file"
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveFile :: FilePath -> IO ()
@@ -84,15 +103,15 @@ safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
 -- Take file path of target and return file path of redo script:
 redoPath :: FilePath -> IO (Maybe FilePath)
 redoPath target = listToMaybe `liftM` filterM doesFileExist candidates
-  where candidates =  [target ++ ".do"] ++ if hasExtension target 
-                                           then [replaceBaseName target "default" ++ ".do"] 
-                                           else []
+  where candidates =  (target ++ ".do") : if hasExtension target 
+                                          then [replaceBaseName target "default" ++ ".do"] 
+                                          else []
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
-upToDate :: String -> FilePath -> IO Bool
-upToDate target metaDepsDir = catch
+upToDate :: FilePath -> IO Bool
+upToDate metaDepsDir = catch
   (do deps <- getDirectoryContents metaDepsDir 
-      (traceShow' . all id) `liftM` mapM depUpToDate deps)
+      and `liftM` mapM depUpToDate deps)
   (\(e :: IOException) -> return False)
   where depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch

@@ -1,6 +1,0 @@
-#!/bin/sh
-
-for dependency in $@
-do
-  md5 -q $dependency > ".redo/$REDO_TARGET/$dependency"
-done
