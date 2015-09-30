@@ -48,18 +48,24 @@ main = do
 redo :: String -> IO ()
 redo target = do
   -- hPutStrLn stderr $ "... redoing " ++ target
+  -- If the target file exists, check dependencies and redo if 
+  -- the dependencies have changed. If the target file does not
+  -- exist, redo (no need to check the dependencies)
   exists <- doesFileExist target
   if exists then 
-    -- The following can probably be improved:
     (do upToDate' <- upToDate metaDepsDir
-        unless upToDate' $ maybe missingDo redo' =<< redoPath target)
-    else maybe missingDo redo' =<< redoPath target
+        unless upToDate' $ redo' target)
+    else redo' target
   where
+    -- Try to run redo, if it fails, print an error message:
+    redo' target = maybe missingDo runDoFile =<< redoPath target
+    -- Print missing do file error:
     missingDo = do
       exists <- doesFileExist target
       unless exists $ error $ "No .do file found for target '" ++ target ++ "'"
-    redo' :: FilePath -> IO ()
-    redo' path = do
+    -- Run the do script:
+    runDoFile :: FilePath -> IO ()
+    runDoFile doFile = do
       hPutStrLn stderr $ "redo " ++ target
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
@@ -67,11 +73,11 @@ redo target = do
                 (\_ -> return())
       createDirectoryIfMissing True metaDepsDir 
       -- Write out .do script as dependency:
-      writeFile (metaDepsDir </> path) =<< md5File path
+      writeFile (metaDepsDir </> doFile) =<< md5File doFile
       -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
       oldEnv <- getEnvironment
       let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_TARGET" target $ fromList oldEnv
-      (_, _, _, processHandle) <- createProcess $ (shell $ command path) {env = Just newEnv}
+      (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
       exit <- waitForProcess processHandle
       case exit of  
         ExitSuccess -> catch (renameFile tmp3 target) handler1
@@ -88,7 +94,7 @@ redo target = do
     -- $1 - the target name
     -- $2 - the target basename
     -- $3 - the temporary target name
-    command path = unwords ["sh", path, target, takeBaseName target, tmp3, ">", tmpStdout]
+    command doFile = unwords ["sh", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch (renameFile tmpStdout target) handler2
@@ -122,4 +128,4 @@ upToDate metaDepsDir = catch
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
 md5File :: FilePath -> IO String
-md5File path = (show . md5) `liftM` BL.readFile path
+md5File file = (show . md5) `liftM` BL.readFile file
