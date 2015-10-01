@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Dependencies:
-redo-ifchange redo.hs README.txt
+redo-ifchange redo.hs chicken
 
 # Compile redo.hs to filename $3 with verbosity set to low 
 # so there is nothing printed to standard out
