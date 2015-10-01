@@ -48,17 +48,11 @@ main = do
 redo :: String -> IO ()
 redo target = do
   -- hPutStrLn stderr $ "... redoing " ++ target
-  -- If the target file exists, check dependencies and redo if 
-  -- the dependencies have changed. If the target file does not
-  -- exist, redo (no need to check the dependencies)
-  exists <- doesFileExist target
-  if exists then 
-    (do upToDate' <- upToDate metaDepsDir
-        unless upToDate' $ redo' target)
-    else redo' target
+  upToDate' <- upToDate target
+  unless upToDate' $ redo' target
   where
     -- Try to run redo, if it fails, print an error message:
-    redo' target = maybe missingDo runDoFile =<< redoPath target
+    redo' target = maybe missingDo runDoFile =<< doPath target
     -- Print missing do file error:
     missingDo = do
       exists <- doesFileExist target
@@ -88,13 +82,13 @@ redo target = do
     -- Dependency meta data directory for storing md5 hashes 
     metaDepsDir = metaDir </> target
     -- Temporary file names:
-    tmp3 = target ++ ".redo-tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-    tmpStdout = target ++ ".redo-tmp2" -- this temp file captures what gets written to stdout
+    tmp3 = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+    tmpStdout = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
     -- Pass redo script 3 arguments:
     -- $1 - the target name
     -- $2 - the target basename
     -- $3 - the temporary target name
-    command doFile = unwords ["sh", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
+    command doFile = unwords ["sh -x", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch (renameFile tmpStdout target) handler2
@@ -107,23 +101,33 @@ safeRemoveFile :: FilePath -> IO ()
 safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
 
 -- Take file path of target and return file path of redo script:
-redoPath :: FilePath -> IO (Maybe FilePath)
-redoPath target = listToMaybe `liftM` filterM doesFileExist candidates
+doPath :: FilePath -> IO (Maybe FilePath)
+doPath target = listToMaybe `liftM` filterM doesFileExist candidates
   where candidates =  (target ++ ".do") : if hasExtension target 
                                           then [replaceBaseName target "default" ++ ".do"] 
                                           else []
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
-upToDate metaDepsDir = catch
-  (do deps <- getDirectoryContents metaDepsDir 
-      and `liftM` mapM depUpToDate deps)
+upToDate target = catch
+  -- If the target does not exist, return then it is not up-to-date
+  -- If the target exists, see if it's dependencies have changed
+  -- If the target's dependencies have changed, it is not up-to-date
+  (do exists <- doesFileExist target
+      if exists then
+        (do deps <- getDirectoryContents $ metaDir </> target
+            and `liftM` mapM depUpToDate deps)
+        else return False)
   (\(e :: IOException) -> return False)
   where depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
-          (do oldMD5 <- withFile (metaDepsDir </> dep) ReadMode hGetLine
+          (do oldMD5 <- withFile (metaDir </> target </> dep) ReadMode hGetLine
               newMD5 <- md5File dep
-              return ( oldMD5 == newMD5) )
+              doScript <- doPath dep
+              case doScript of
+                Nothing -> return (oldMD5 == newMD5)
+                Just _ -> do upToDate' <- upToDate dep 
+                             return $ (oldMD5 == newMD5) && upToDate')
           -- Ignore "." and ".." directories
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
