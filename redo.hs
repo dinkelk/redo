@@ -10,11 +10,11 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing)
+import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>))
-import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..))
+import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName)
+import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
 import Data.Bool (bool)
@@ -31,11 +31,13 @@ deriving instance Show CmdSpec
 metaDir = ".redo"
 
 main :: IO ()
---main = do
---  args <- getArgs
---  mapM_ redo args
 main = do 
-  mapM_ redo =<< getArgs
+  topDir <- getCurrentDirectory
+  mapM_ (\arg -> do
+    let (dir, filename) = splitFileName arg
+    setCurrentDirectory dir
+    redo dir filename 
+    setCurrentDirectory topDir) =<< getArgs
   progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
@@ -43,10 +45,9 @@ main = do
     ("redo-ifchange", Just redoTarget) -> mapM_ (writeMD5 redoTarget) =<< getArgs
     ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
     _ -> return ()
-  where writeMD5 target dep = writeFile (metaDir </> target </> dep ) =<< md5File dep
 
-redo :: String -> IO ()
-redo target = do
+redo :: FilePath -> String -> IO ()
+redo dir target = do
   -- hPutStrLn stderr $ "... redoing " ++ target
   upToDate' <- upToDate target
   unless upToDate' $ redo' target
@@ -55,19 +56,21 @@ redo target = do
     redo' target = maybe missingDo runDoFile =<< doPath target
     -- Print missing do file error:
     missingDo = do
+      -- TODO: we should not need the line below, we should just error. we just need to not error if the
+      -- call is redo-ifchange, not redo
       exists <- doesFileExist target
-      unless exists $ error $ "No .do file found for target '" ++ target ++ "'"
+      unless exists $ error $ "No .do file found for target '" ++ show (dir </> target) ++ "'"
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
-      hPutStrLn stderr $ "redo " ++ target
+      hPutStrLn stderr $ "redo " ++ show (dir </> target)
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
                 (\_ -> return())
       createDirectoryIfMissing True metaDepsDir 
       -- Write out .do script as dependency:
-      writeFile (metaDepsDir </> doFile) =<< md5File doFile
+      writeMD5 target doFile
       -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
       oldEnv <- getEnvironment
       let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_TARGET" target $ fromList oldEnv
@@ -91,7 +94,12 @@ redo target = do
     command doFile = unwords ["sh -x", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
-    handler1 ex = catch (renameFile tmpStdout target) handler2
+    handler1 ex = catch 
+                  (do size <- fileSize tmpStdout
+                      if (size > 0) then
+                        renameFile tmpStdout target 
+                      else return ())
+                  handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
     handler2 ex = hPutStrLn stderr "Redo could not copy results from temporary file"
@@ -109,27 +117,39 @@ doPath target = listToMaybe `liftM` filterM doesFileExist candidates
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
-upToDate target = catch
+upToDate pathToTarget = catch
   -- If the target does not exist, return then it is not up-to-date
   -- If the target exists, see if it's dependencies have changed
   -- If the target's dependencies have changed, it is not up-to-date
-  (do exists <- doesFileExist target
+  (do --hPutStrLn stderr $ "\nis " ++ pathToTarget ++ " up2date?" 
+      exists <- doesFileExist pathToTarget 
+      --hPutStrLn stderr $ "exists?: " ++ show exists 
       if exists then
-        (do deps <- getDirectoryContents $ metaDir </> target
-            and `liftM` mapM depUpToDate deps)
+        (do md5s <- getDirectoryContents $ depDir
+            and `liftM` mapM depUpToDate md5s)
         else return False)
   (\(e :: IOException) -> return False)
-  where depUpToDate :: FilePath -> IO Bool
-        depUpToDate dep = catch
-          (do oldMD5 <- withFile (metaDir </> target </> dep) ReadMode hGetLine
-              newMD5 <- md5File dep
+  where (dir, target) = splitFileName pathToTarget
+        depDir = dir </> metaDir </> target
+        depUpToDate :: String -> IO Bool
+        depUpToDate oldMD5 = catch
+          (do dep <- withFile (depDir </> oldMD5) ReadMode hGetLine
+              newMD5 <- fileMD5 dep
               doScript <- doPath dep
               case doScript of
                 Nothing -> return (oldMD5 == newMD5)
-                Just _ -> do upToDate' <- upToDate dep 
+                Just _ -> do upToDate' <- upToDate  dep
                              return $ (oldMD5 == newMD5) && upToDate')
           -- Ignore "." and ".." directories
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
-md5File :: FilePath -> IO String
-md5File file = (show . md5) `liftM` BL.readFile file
+fileMD5 :: FilePath -> IO String
+fileMD5 file = (show . md5) `liftM` BL.readFile file
+
+writeMD5 :: String -> FilePath -> IO ()
+writeMD5 target dep = do 
+  hash <- fileMD5 dep
+  writeFile (metaDir </> target </> hash) dep
+
+fileSize :: FilePath -> IO Integer
+fileSize path = withFile path ReadMode hFileSize

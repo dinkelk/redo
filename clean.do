@@ -1,3 +1,3 @@
 #!/bin/sh
 
-rm -rf *.o *.hi redo .redo README.txt chicken clean
+rm -rf *.o *.hi .redo README.txt chicken clean nothing recursive/recursivechicken subdir/README.txt

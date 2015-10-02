@@ -1,4 +1,4 @@
 #!/bin/sh
 
-redo-ifchange README.txt
+redo-ifchange subdir/README.txt
 echo "chicken"
