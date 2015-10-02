@@ -32,12 +32,7 @@ metaDir = ".redo"
 
 main :: IO ()
 main = do 
-  topDir <- getCurrentDirectory
-  mapM_ (\arg -> do
-    let (dir, filename) = splitFileName arg
-    setCurrentDirectory dir
-    redo dir filename 
-    setCurrentDirectory topDir) =<< getArgs
+  mapM_ redo =<< getArgs
   progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
@@ -46,24 +41,27 @@ main = do
     ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
     _ -> return ()
 
-redo :: FilePath -> String -> IO ()
-redo dir target = do
+redo :: FilePath -> IO ()
+redo pathToTarget = do 
   -- hPutStrLn stderr $ "... redoing " ++ target
+  topDir <- getCurrentDirectory
+  setCurrentDirectory dir
   upToDate' <- upToDate target
-  unless upToDate' $ redo' target
+  -- Try to run redo if out of date, if it fails, print an error message:
+  unless upToDate' $ maybe missingDo runDoFile =<< doPath target
+  setCurrentDirectory topDir
   where
-    -- Try to run redo, if it fails, print an error message:
-    redo' target = maybe missingDo runDoFile =<< doPath target
+    (dir, target) = splitFileName pathToTarget
     -- Print missing do file error:
     missingDo = do
       -- TODO: we should not need the line below, we should just error. we just need to not error if the
       -- call is redo-ifchange, not redo
       exists <- doesFileExist target
-      unless exists $ error $ "No .do file found for target '" ++ show (dir </> target) ++ "'"
+      unless exists $ error $ "No .do file found for target '" ++ pathToTarget ++ "'"
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
-      hPutStrLn stderr $ "redo " ++ show (dir </> target)
+      hPutStrLn stderr $ "redo " ++ pathToTarget
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
