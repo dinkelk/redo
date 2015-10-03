@@ -2,7 +2,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-import Control.Monad (filterM, liftM, unless, guard)
+import Control.Monad (filterM, liftM, unless, guard, when)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
@@ -57,7 +57,7 @@ redo pathToTarget = do
     missingDo = do
       -- TODO: we should not need the line below, we should just error. we just need to not error if the
       -- call is redo-ifchange, not redo
-      exists <- doesFileExist target
+      exists <- doesFileExist target -- should be deleted for redo, and included for redo-ifchange
       unless exists $ error $ "No .do file found for target '" ++ pathToTarget ++ "'"
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
@@ -95,9 +95,7 @@ redo pathToTarget = do
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
                   (do size <- fileSize tmpStdout
-                      if (size > 0) then
-                        renameFile tmpStdout target 
-                      else return ())
+                      when (size > 0) $ renameFile tmpStdout target)
                   handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
@@ -122,7 +120,7 @@ upToDate pathToTarget = catch
   -- If the target's dependencies have changed, it is not up-to-date
   (do exists <- doesFileExist pathToTarget 
       if exists then
-        do depHashFiles <- getDirectoryContents $ depHashDir
+        do depHashFiles <- getDirectoryContents depHashDir
            let depFiles = filterDotFiles $ map unEscapseFilePath depHashFiles
            and `liftM` mapM depUpToDate depFiles
         else return False)
@@ -130,7 +128,7 @@ upToDate pathToTarget = catch
   where (dir, target) = splitFileName pathToTarget
         depHashDir = dir </> metaDir </> target
         filterDotFiles :: [FilePath] -> [FilePath]
-        filterDotFiles fileList = filter (\a -> a /= ".." && a /= ".") fileList
+        filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: String -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dir </> dep
@@ -143,13 +141,13 @@ upToDate pathToTarget = catch
                 Just _ -> do upToDate' <- upToDate depFile
                              return $ (oldMD5 == newMD5) && upToDate')
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
-          (\e -> do return (ioeGetErrorType e == InappropriateType))
+          (\e -> return (ioeGetErrorType e == InappropriateType))
 
 -- Takes a file path and replaces all </> with @
 escapeFilePath :: FilePath -> String
 escapeFilePath path = "@" ++ concatMap repl path
   where repl '^' = "^@"
-        repl c   = if isPathSeparator(c) then "^" else [c]
+        repl c   = if isPathSeparator c then "^" else [c]
 
 -- Reverses escapeFilePath
 unEscapseFilePath :: String -> String
