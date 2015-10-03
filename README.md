@@ -4,15 +4,15 @@ An implementation of djb's [redo](http://cr.yp.to/redo.html) in [Haskell](https:
 
 > Redo allows you to rebuild files from source files when they've changed. It's simpler than other build systems such as Make or SCons and more generic than language-specific build systems such as Cabal or Apache Ant. Redo gains its power and simplicity by leveraging other tools (in the Unix tradition). Build scripts for redo are simply shell scripts that follow a few conventions.
 
-# Usage
+## Usage
 
 TODO
 
-# Install
+## Install
 
 TODO
 
-# About This Implementation
+## About This Implementation
 
 This implementation was inspired by [Chris Forno](https://github.com/jekor/redo)'s fantastic YouTube series [Haskell from Scratch](https://www.youtube.com/watch?v=zZ_nI9E9g0I), but has been improved upon in a few ways.
 
@@ -26,11 +26,11 @@ This implementation was inspired by [Chris Forno](https://github.com/jekor/redo)
 
 This implementation has been tested on MacOSX but should work on any Unix-like platform, and with a little exta effort, maybe even on Windows.
 
-# Performance
+## Performance
 
 TODO
 
-# Credits
+## Credits
 
 D. J. Bernstein conceived the idea behind `redo` and wrote some notes at http://cr.yp.to/redo.html.
 
