@@ -5,7 +5,8 @@
 import Control.Monad (filterM, liftM, unless, guard)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
-import Data.Digest.Pure.MD5 (md5) 
+import Data.Digest.Pure.MD5 (md5)
+import Data.List (concatMap)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe)
 import Debug.Trace (traceShow)
@@ -13,7 +14,7 @@ import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName)
+import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator)
 import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
@@ -89,7 +90,7 @@ redo pathToTarget = do
     -- $1 - the target name
     -- $2 - the target basename
     -- $3 - the temporary target name
-    command doFile = unwords ["sh -x", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
+    command doFile = unwords ["sh", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
@@ -119,27 +120,50 @@ upToDate pathToTarget = catch
   -- If the target does not exist, return then it is not up-to-date
   -- If the target exists, see if it's dependencies have changed
   -- If the target's dependencies have changed, it is not up-to-date
-  (do --hPutStrLn stderr $ "\nis " ++ pathToTarget ++ " up2date?" 
-      exists <- doesFileExist pathToTarget 
-      --hPutStrLn stderr $ "exists?: " ++ show exists 
+  (do exists <- doesFileExist pathToTarget 
       if exists then
-        (do md5s <- getDirectoryContents $ depDir
-            and `liftM` mapM depUpToDate md5s)
+        do depHashFiles <- getDirectoryContents $ depHashDir
+           let depFiles = filterDotFiles $ map unEscapseFilePath depHashFiles
+           and `liftM` mapM depUpToDate depFiles
         else return False)
   (\(e :: IOException) -> return False)
   where (dir, target) = splitFileName pathToTarget
-        depDir = dir </> metaDir </> target
+        depHashDir = dir </> metaDir </> target
+        filterDotFiles :: [FilePath] -> [FilePath]
+        filterDotFiles fileList = filter (\a -> a /= ".." && a /= ".") fileList
         depUpToDate :: String -> IO Bool
-        depUpToDate oldMD5 = catch
-          (do dep <- withFile (depDir </> oldMD5) ReadMode hGetLine
-              newMD5 <- fileMD5 dep
-              doScript <- doPath dep
+        depUpToDate dep = catch
+          (do let depFile = dir </> dep
+              let depHashFile = depHashDir </> escapeFilePath dep
+              oldMD5 <- withFile depHashFile ReadMode hGetLine
+              newMD5 <- fileMD5 depFile
+              doScript <- doPath depFile
               case doScript of
                 Nothing -> return (oldMD5 == newMD5)
-                Just _ -> do upToDate' <- upToDate  dep
+                Just _ -> do upToDate' <- upToDate depFile
                              return $ (oldMD5 == newMD5) && upToDate')
-          -- Ignore "." and ".." directories
-          (\e -> return (ioeGetErrorType e == InappropriateType))
+          -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
+          (\e -> do return (ioeGetErrorType e == InappropriateType))
+
+-- Takes a file path and replaces all </> with @
+escapeFilePath :: FilePath -> String
+escapeFilePath path = "@" ++ concatMap repl path
+  where repl '^' = "^@"
+        repl c   = if isPathSeparator(c) then "^" else [c]
+
+-- Reverses escapeFilePath
+unEscapseFilePath :: String -> String
+unEscapseFilePath name = if head name == '@' then unEscape $ tail name else name
+  where 
+    unEscape [] = []
+    unEscape string = first : unEscape rest
+      where
+        (first, rest) = repl string
+        repl (x:xs) = if x == '^'
+                      then if head xs == '@'
+                           then ('^', tail xs)
+                           else (pathSeparator, xs)
+                      else (x, xs)
 
 fileMD5 :: FilePath -> IO String
 fileMD5 file = (show . md5) `liftM` BL.readFile file
@@ -147,7 +171,7 @@ fileMD5 file = (show . md5) `liftM` BL.readFile file
 writeMD5 :: String -> FilePath -> IO ()
 writeMD5 target dep = do 
   hash <- fileMD5 dep
-  writeFile (metaDir </> target </> hash) dep
+  writeFile (metaDir </> target </> escapeFilePath dep) hash
 
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
