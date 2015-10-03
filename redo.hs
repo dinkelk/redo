@@ -1,6 +1,7 @@
 -- adding StandAloneDeriving extension:
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE CPP #-}
 
 import Control.Monad (filterM, liftM, unless, guard, when)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
@@ -13,7 +14,7 @@ import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
-import System.Exit (ExitCode(..))
+import System.Exit (ExitCode(..), exitWith)
 import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator)
 import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
@@ -28,7 +29,7 @@ deriving instance Show CreateProcess
 deriving instance Show StdStream
 deriving instance Show CmdSpec
 
--- Some global defines:
+-- | Directory for storing and fetching data on dependencies of redo targets.
 metaDir = ".redo"
 
 main :: IO ()
@@ -77,7 +78,10 @@ redo pathToTarget = do
       exit <- waitForProcess processHandle
       case exit of  
         ExitSuccess -> catch (renameFile tmp3 target) handler1
-        ExitFailure code -> hPutStrLn stderr $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
+        ExitFailure code -> do hPutStrLn stderr $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
+                               safeRemoveFile tmp3
+                               safeRemoveFile tmpStdout
+                               exitWith $ ExitFailure code
       -- Remove the temporary files:
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout
@@ -90,7 +94,7 @@ redo pathToTarget = do
     -- $1 - the target name
     -- $2 - the target basename
     -- $3 - the temporary target name
-    command doFile = unwords ["sh", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
+    command doFile = unwords ["sh -e", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
@@ -143,23 +147,27 @@ upToDate pathToTarget = catch
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
+-- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
+#define seperator_replacement '^'
+#define dependency_prepend '@'
+#define seperator_replacement_escape '@'
 -- Takes a file path and replaces all </> with @
 escapeFilePath :: FilePath -> String
-escapeFilePath path = "@" ++ concatMap repl path
-  where repl '^' = "^@"
-        repl c   = if isPathSeparator c then "^" else [c]
+escapeFilePath path = [dependency_prepend] ++ concatMap repl path
+  where repl seperator_replacement = [seperator_replacement] ++ [seperator_replacement_escape]
+        repl c   = if isPathSeparator c then [seperator_replacement] else [c]
 
 -- Reverses escapeFilePath
 unEscapseFilePath :: String -> String
-unEscapseFilePath name = if head name == '@' then unEscape $ tail name else name
+unEscapseFilePath name = if head name == dependency_prepend then unEscape $ tail name else name
   where 
     unEscape [] = []
     unEscape string = first : unEscape rest
       where
         (first, rest) = repl string
-        repl (x:xs) = if x == '^'
-                      then if head xs == '@'
-                           then ('^', tail xs)
+        repl (x:xs) = if x == seperator_replacement
+                      then if head xs == seperator_replacement_escape
+                           then (seperator_replacement, tail xs)
                            else (pathSeparator, xs)
                       else (x, xs)
 
