@@ -9,14 +9,14 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
 import Data.List (concatMap)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, isNothing, fromJust)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
-import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
+import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith)
-import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator)
+import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative)
 import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
@@ -37,7 +37,7 @@ metaDir = ".redo"
 putColorStrLn :: Color -> String -> IO ()
 putColorStrLn color string = do hSetSGR stderr [SetColor Foreground Vivid color]
                                 hPutStrLn stderr $ string
-                                hSetSGR stderr [SetColor Foreground Vivid Yellow]
+                                hSetSGR stderr [Reset]
 
 putInfoStrLn :: String -> IO ()
 putInfoStrLn string = putColorStrLn Green string
@@ -50,19 +50,29 @@ putErrorStrLn string = putColorStrLn Red string
 
 main :: IO ()
 main = do 
-  mapM_ redo =<< getArgs
+  -- See if this is the first call to redo by checking REDO_PATH. Set REDO_PATH if it is unset
+  redoPath <- lookupEnv "REDO_PATH"  
+  when (isNothing redoPath) $ setEnv "REDO_PATH" =<< getCurrentDirectory
+  -- TODO ^^ need to pass this on to env in bash call!
+ 
+  -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
+  args <- getArgs
+  let args2redo = if null args && isNothing redoPath then ["all"] else args
+  mapM_ redo args2redo 
   progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
   case (progName, redoTarget') of 
     ("redo-ifchange", Just redoTarget) -> mapM_ (storeHash redoTarget) =<< getArgs
-    ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
+    ("redo-ifchange", Nothing) -> putErrorStrLn "Missing REDO_TARGET environment variable."
+    ("redo-ifcreate", _) -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
     _ -> return ()
 
 redo :: FilePath -> IO ()
 redo pathToTarget = do 
   topDir <- getCurrentDirectory
-  -- putInfoStrLn $ "... redoing " ++ (topDir </> target)
+  --redoPath <- lookupEnv "REDO_PATH"  
+  --hPutStrLn stderr $ "... redoing " ++ (makeRelative (fromJust redoPath) pathToTarget)
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitWith $ ExitFailure 1)
@@ -77,12 +87,17 @@ redo pathToTarget = do
       -- TODO: we should not need the line below, we should just error. we just need to not error if the
       -- call is redo-ifchange, not redo
       exists <- doesFileExist target -- should be deleted for redo, and included for redo-ifchange
-      unless exists $ error $ "No .do file found for target '" ++ pathToTarget ++ "'"
+      unless exists $ putErrorStrLn $ "No .do file found for target '" ++ pathToTarget ++ "'"
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
-      topDir <- getCurrentDirectory
-      putInfoStrLn $ "redo " ++ (topDir </> target)
+      --redoPath <- getCurrentDirectory
+      redoPath' <- lookupEnv "REDO_PATH"  
+      currentDir <- getCurrentDirectory
+      let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
+      putErrorStrLn $ "redo path: " ++ redoPath
+      putErrorStrLn $ "path to target: " ++ pathToTarget
+      putInfoStrLn $ "redo " ++ (makeRelative (redoPath) pathToTarget)
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
@@ -92,15 +107,15 @@ redo pathToTarget = do
       storeHash target doFile
       -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
       oldEnv <- getEnvironment
-      let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_TARGET" target $ fromList oldEnv
+      let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_PATH" redoPath $ insert "REDO_TARGET" target $ fromList oldEnv
       (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
       exit <- waitForProcess processHandle
       case exit of  
         ExitSuccess -> catch (renameFile tmp3 target) handler1
-        ExitFailure code -> do putErrorStrLn $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
-                               safeRemoveFile tmp3
-                               safeRemoveFile tmpStdout
-                               exitWith $ ExitFailure code
+        ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
+                               --safeRemoveFile tmp3
+                               --safeRemoveFile tmpStdout
+                               --exitWith $ ExitFailure code
       -- Remove the temporary files:
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout
