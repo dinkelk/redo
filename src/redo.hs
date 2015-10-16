@@ -12,6 +12,7 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
+import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
@@ -32,6 +33,21 @@ deriving instance Show CmdSpec
 -- | Directory for storing and fetching data on dependencies of redo targets.
 metaDir = ".redo"
 
+-- Set colors and write some text in those colors.
+putColorStrLn :: Color -> String -> IO ()
+putColorStrLn color string = do hSetSGR stderr [SetColor Foreground Vivid color]
+                                hPutStrLn stderr $ string
+                                hSetSGR stderr [SetColor Foreground Vivid Yellow]
+
+putInfoStrLn :: String -> IO ()
+putInfoStrLn string = putColorStrLn Green string
+
+putWarningStrLn :: String -> IO ()
+putWarningStrLn string = putColorStrLn Yellow string
+
+putErrorStrLn :: String -> IO ()
+putErrorStrLn string = putColorStrLn Red string
+
 main :: IO ()
 main = do 
   mapM_ redo =<< getArgs
@@ -46,9 +62,9 @@ main = do
 redo :: FilePath -> IO ()
 redo pathToTarget = do 
   topDir <- getCurrentDirectory
-  --hPutStrLn stderr $ "... redoing " ++ (topDir </> target)
+  -- putInfoStrLn $ "... redoing " ++ (topDir </> target)
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
-    hPutStrLn stderr $ "No such directory " ++ topDir </> dir
+    putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitWith $ ExitFailure 1)
   upToDate' <- upToDate target
   -- Try to run redo if out of date, if it fails, print an error message:
@@ -66,7 +82,7 @@ redo pathToTarget = do
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
       topDir <- getCurrentDirectory
-      hPutStrLn stderr $ "redo " ++ (topDir </> target)
+      putInfoStrLn $ "redo " ++ (topDir </> target)
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
@@ -81,7 +97,7 @@ redo pathToTarget = do
       exit <- waitForProcess processHandle
       case exit of  
         ExitSuccess -> catch (renameFile tmp3 target) handler1
-        ExitFailure code -> do hPutStrLn stderr $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
+        ExitFailure code -> do putErrorStrLn $ "\n" ++ "Redo script exited with non-zero exit code: " ++ show code
                                safeRemoveFile tmp3
                                safeRemoveFile tmpStdout
                                exitWith $ ExitFailure code
@@ -106,7 +122,7 @@ redo pathToTarget = do
                   handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
-    handler2 ex = hPutStrLn stderr "Redo could not copy results from temporary file"
+    handler2 ex = putErrorStrLn "Redo could not copy results from temporary file"
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveFile :: FilePath -> IO ()
@@ -140,9 +156,7 @@ upToDate pathToTarget = catch
         depUpToDate dep = catch
           (do let depFile = dir </> dep
               let hashFile = dir </> depHashFile target dep
-              --hPutStrLn stderr $ "Opening hashFile " ++ hashFile
               oldHash <- withFile hashFile ReadMode hGetLine
-              --hPutStrLn stderr $ "Opening depFile " ++ depFile
               newHash <- computeHash depFile
               doScript <- doPath depFile
               case doScript of
