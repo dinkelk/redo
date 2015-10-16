@@ -38,16 +38,18 @@ main = do
   progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
-  case (progName, redoTarget') of
-    ("redo-ifchange", Just redoTarget) -> mapM_ (writeMD5 redoTarget) =<< getArgs
+  case (progName, redoTarget') of 
+    ("redo-ifchange", Just redoTarget) -> mapM_ (storeHash redoTarget) =<< getArgs
     ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
     _ -> return ()
 
 redo :: FilePath -> IO ()
 redo pathToTarget = do 
-  -- hPutStrLn stderr $ "... redoing " ++ target
   topDir <- getCurrentDirectory
-  setCurrentDirectory dir
+  --hPutStrLn stderr $ "... redoing " ++ (topDir </> target)
+  catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
+    hPutStrLn stderr $ "No such directory " ++ topDir </> dir
+    exitWith $ ExitFailure 1)
   upToDate' <- upToDate target
   -- Try to run redo if out of date, if it fails, print an error message:
   unless upToDate' $ maybe missingDo runDoFile =<< doPath target
@@ -63,14 +65,15 @@ redo pathToTarget = do
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
-      hPutStrLn stderr $ "redo " ++ pathToTarget
+      topDir <- getCurrentDirectory
+      hPutStrLn stderr $ "redo " ++ (topDir </> target)
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
                 (\_ -> return())
       createDirectoryIfMissing True metaDepsDir 
       -- Write out .do script as dependency:
-      writeMD5 target doFile
+      storeHash target doFile
       -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
       oldEnv <- getEnvironment
       let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_TARGET" target $ fromList oldEnv
@@ -86,7 +89,7 @@ redo pathToTarget = do
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout
     -- Dependency meta data directory for storing md5 hashes 
-    metaDepsDir = metaDir </> target
+    metaDepsDir = depHashDir target
     -- Temporary file names:
     tmp3 = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
     tmpStdout = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
@@ -124,26 +127,28 @@ upToDate pathToTarget = catch
   -- If the target's dependencies have changed, it is not up-to-date
   (do exists <- doesFileExist pathToTarget 
       if exists then
-        do depHashFiles <- getDirectoryContents depHashDir
+        do depHashFiles <- getDirectoryContents hashDir
            let depFiles = filterDotFiles $ map unEscapseFilePath depHashFiles
            and `liftM` mapM depUpToDate depFiles
         else return False)
   (\(e :: IOException) -> return False)
   where (dir, target) = splitFileName pathToTarget
-        depHashDir = dir </> metaDir </> target
+        hashDir = dir </> depHashDir target 
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: String -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dir </> dep
-              let depHashFile = depHashDir </> escapeFilePath dep
-              oldMD5 <- withFile depHashFile ReadMode hGetLine
-              newMD5 <- fileMD5 depFile
+              let hashFile = dir </> depHashFile target dep
+              --hPutStrLn stderr $ "Opening hashFile " ++ hashFile
+              oldHash <- withFile hashFile ReadMode hGetLine
+              --hPutStrLn stderr $ "Opening depFile " ++ depFile
+              newHash <- computeHash depFile
               doScript <- doPath depFile
               case doScript of
-                Nothing -> return (oldMD5 == newMD5)
+                Nothing -> return (oldHash == newHash)
                 Just _ -> do upToDate' <- upToDate depFile
-                             return $ (oldMD5 == newMD5) && upToDate')
+                             return $ (oldHash == newHash) && upToDate')
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
@@ -171,13 +176,25 @@ unEscapseFilePath name = if head name == dependency_prepend then unEscape $ tail
                            else (pathSeparator, xs)
                       else (x, xs)
 
-fileMD5 :: FilePath -> IO String
-fileMD5 file = (show . md5) `liftM` BL.readFile file
+-- Calculate the hash of a file
+computeHash :: FilePath -> IO String
+computeHash file = (show . md5) `liftM` BL.readFile file
 
-writeMD5 :: String -> FilePath -> IO ()
-writeMD5 target dep = do 
-  hash <- fileMD5 dep
-  writeFile (metaDir </> target </> escapeFilePath dep) hash
+-- Calculate the hash of a target's dependency and write it to the proper meta data location
+-- If the dependency doesn't exist, do not store a hash
+storeHash :: String -> FilePath -> IO ()
+storeHash target dep = catch
+  ( do hash <- computeHash dep
+       writeFile (depHashFile target dep) hash )
+  (\(e :: SomeException) -> return ())
+
+-- Form the hash directory where a target's dependency hashes will be stored given the target
+depHashDir :: String -> FilePath 
+depHashDir target = metaDir </> (".__" ++ target ++ "__")
+
+-- Form the hash file path for a target's dependency given the current target and its dependency
+depHashFile :: String -> FilePath -> FilePath
+depHashFile target dep = depHashDir target </> escapeFilePath dep
 
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
