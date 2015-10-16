@@ -4,11 +4,15 @@ An implementation of djb's [redo](http://cr.yp.to/redo.html) in [Haskell](https:
 
 > Redo allows you to rebuild files from source files when they've changed. It's simpler than other build systems such as Make or SCons and more generic than language-specific build systems such as Cabal or Apache Ant. Redo gains its power and simplicity by leveraging other tools (in the Unix tradition). Build scripts for redo are simply shell scripts that follow a few conventions.
 
+## Installation
+
+To install redo, clone this repository and run:
+
+    ./do build
+
+in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, and `redo-ifcreate` binaries. Add this `bin/` directory to your path or copy its contents to a directory on your path and enjoy!
+
 ## Usage
-
-TODO
-
-## Install
 
 TODO
 
