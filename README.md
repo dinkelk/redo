@@ -6,11 +6,13 @@ An implementation of djb's [redo](http://cr.yp.to/redo.html) in [Haskell](https:
 
 ## Installation
 
-To install redo, clone this repository and run:
+To install redo, first make sure you have [GHC](https://www.haskell.org/ghc/) installed. For some, it may be easier to just install the whole [Haskell Platform](https://www.haskell.org/platform/).
+
+Next, clone this repository and run:
 
     ./do build
 
-in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, and `redo-ifcreate` binaries. Add this `bin/` directory to your path or copy its contents to a directory on your path and enjoy!
+in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, and `redo-ifcreate` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 
 ## Usage
 
