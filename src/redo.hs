@@ -12,12 +12,12 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe, isNothing, fromJust)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..))
+import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative)
-import System.IO (hPutStrLn, stderr, withFile, hGetLine, IOMode(..), hFileSize)
+import System.IO (hPutStrLn, hPutStr, stderr, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
 import Data.Bool (bool)
@@ -34,10 +34,17 @@ deriving instance Show CmdSpec
 metaDir = ".redo"
 
 -- Set colors and write some text in those colors.
+setConsoleDefault = do hSetSGR stderr [Reset]
+setConsoleColor color = do hSetSGR stderr [SetColor Foreground Vivid color] 
+setConsoleBold = do hSetSGR stderr [SetConsoleIntensity BoldIntensity]
+setConsoleFaint = do hSetSGR stderr [SetConsoleIntensity FaintIntensity]
+setConsoleColorDull color = do hSetSGR stderr [SetColor Foreground Dull color] 
+
 putColorStrLn :: Color -> String -> IO ()
-putColorStrLn color string = do hSetSGR stderr [SetColor Foreground Vivid color]
+putColorStrLn color string = do setConsoleColor color
+                                setConsoleBold 
                                 hPutStrLn stderr $ string
-                                hSetSGR stderr [Reset]
+                                setConsoleDefault 
 
 putInfoStrLn :: String -> IO ()
 putInfoStrLn string = putColorStrLn Green string
@@ -48,15 +55,21 @@ putWarningStrLn string = putColorStrLn Yellow string
 putErrorStrLn :: String -> IO ()
 putErrorStrLn string = putColorStrLn Red string
 
+putRedoStatus :: Int -> String -> IO ()
+putRedoStatus depth file = do setConsoleColorDull Green 
+                              setConsoleFaint
+                              hPutStr stderr $ "redo " ++ (foldr (++) "" $ replicate depth "  ") 
+                              setConsoleColor Green
+                              setConsoleBold
+                              hPutStrLn stderr $ file
+                              setConsoleDefault
+
 main :: IO ()
 main = do 
-  -- See if this is the first call to redo by checking REDO_PATH. Set REDO_PATH if it is unset
-  redoPath <- lookupEnv "REDO_PATH"  
-  when (isNothing redoPath) $ setEnv "REDO_PATH" =<< getCurrentDirectory
-  -- TODO ^^ need to pass this on to env in bash call!
- 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
+  -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
   args <- getArgs
+  redoPath <- lookupEnv "REDO_PATH"  
   let args2redo = if null args && isNothing redoPath then ["all"] else args
   mapM_ redo args2redo 
   progName <- getProgName
@@ -71,8 +84,10 @@ main = do
 redo :: FilePath -> IO ()
 redo pathToTarget = do 
   topDir <- getCurrentDirectory
-  --redoPath <- lookupEnv "REDO_PATH"  
-  --hPutStrLn stderr $ "... redoing " ++ (makeRelative (fromJust redoPath) pathToTarget)
+  redoTarget' <- lookupEnv "REDO_TARGET"
+  --case (redoTarget') of 
+  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
+  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitWith $ ExitFailure 1)
@@ -91,13 +106,18 @@ redo pathToTarget = do
     -- Run the do script:
     runDoFile :: FilePath -> IO ()
     runDoFile doFile = do
-      --redoPath <- getCurrentDirectory
-      redoPath' <- lookupEnv "REDO_PATH"  
+      -- Print what we are currently "redoing"
       currentDir <- getCurrentDirectory
+      redoPath' <- lookupEnv "REDO_PATH"  
+      redoDepth' <- lookupEnv "REDO_DEPTH"
       let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
-      putErrorStrLn $ "redo path: " ++ redoPath
-      putErrorStrLn $ "path to target: " ++ pathToTarget
-      putInfoStrLn $ "redo " ++ (makeRelative (redoPath) pathToTarget)
+      let absoluteTargetPath = (currentDir </> target)
+      let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
+      --putErrorStrLn $ "redo path:            " ++ redoPath 
+      --putErrorStrLn $ "path to target:       " ++ pathToTarget
+      --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
+      putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
+
       -- Create meta data folder:
       catchJust (guard . isDoesNotExistError)
                 (removeDirectoryRecursive metaDepsDir)
@@ -107,15 +127,19 @@ redo pathToTarget = do
       storeHash target doFile
       -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
       oldEnv <- getEnvironment
-      let newEnv = toList $ adjust (++ ":.") "PATH" $ insert "REDO_PATH" redoPath $ insert "REDO_TARGET" target $ fromList oldEnv
+      let newEnv = toList $ adjust (++ ":.") "PATH" 
+                          $ insert "REDO_DEPTH" redoDepth
+                          $ insert "REDO_PATH" redoPath 
+                          $ insert "REDO_TARGET" target 
+                          $ fromList oldEnv
       (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
       exit <- waitForProcess processHandle
       case exit of  
         ExitSuccess -> catch (renameFile tmp3 target) handler1
         ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
-                               --safeRemoveFile tmp3
-                               --safeRemoveFile tmpStdout
-                               --exitWith $ ExitFailure code
+                               safeRemoveFile tmp3
+                               safeRemoveFile tmpStdout
+                               exitWith $ ExitFailure code
       -- Remove the temporary files:
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout

@@ -24,7 +24,7 @@ This implementation was inspired by [Chris Forno](https://github.com/jekor/redo)
 
 1. (TODO) `redo-ifcreate` is implemented, which rebuilds a target if a file appears
 2. Target dependency meta-data is stored in a manner that should be immune to conflicts
-3. (TODO) Improved colors and formatting on redo output to commandline
+3. Improved colors and formatting on redo output to commandline
 5. (TODO) `-jN` flag has been added to support parallel (faster) builds 
 4. (TODO) A `redo-status` feature has been implemented which prints which dependencies of a target are up to date, and whose which are not.
 5. (TODO) A `redo-init` feature has been added to inialize a repository for redo builds
