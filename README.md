@@ -10,7 +10,7 @@ To install redo, first make sure you have [GHC](https://www.haskell.org/ghc/) in
 
 Next, clone this repository and run:
 
-    ./do build
+    ./do 
 
 in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, and `redo-ifcreate` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 

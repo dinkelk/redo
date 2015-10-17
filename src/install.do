@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Dependencies:
-binaries="redo redo-ifchange"
+binaries="redo redo-ifchange redo-ifcreate"
 redo-ifchange $binaries
 
 # Create bin directory and copy over built files:
