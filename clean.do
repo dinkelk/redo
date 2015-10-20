@@ -1,4 +1,4 @@
 #!/bin/sh
 
 redo src/clean
-rm -rf bin
+rm -rf bin all

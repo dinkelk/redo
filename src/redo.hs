@@ -123,45 +123,36 @@ main = do
 
   -- Perform the proper action based on the program name:
   case (progName) of 
-    ("redo") -> mapM_ redo targets2redo 
-    ("redo-ifchange") -> do mapM_ redo_ifchange targets2redo
+    ("redo") -> mapM_ (performActionInTargetDir redo) targets2redo 
+    ("redo-ifchange") -> do mapM_ (performActionInTargetDir redo_ifchange) targets2redo
                             when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
     ("redo-ifcreate") -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
     _ -> return ()
 
-redo :: FilePath -> IO ()
-redo pathToTarget = do 
+-- This applies a function to a target in the directory that that target it located in
+-- then it returns the current directory to the starting directory:
+performActionInTargetDir :: (FilePath -> IO ()) -> FilePath -> IO ()
+performActionInTargetDir action pathToTarget = do
   topDir <- getCurrentDirectory
   --redoTarget' <- lookupEnv "REDO_TARGET"
   --case (redoTarget') of 
   --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
-  hPutStrLn stderr $ "running redo"
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitFailure)
-  runDoFile target
+  action target
   setCurrentDirectory topDir
   where
     (dir, target) = splitFileName pathToTarget
 
+redo :: FilePath -> IO ()
+redo target = do runDoFile target
+
 redo_ifchange :: FilePath -> IO ()
-redo_ifchange pathToTarget = do 
-  topDir <- getCurrentDirectory
-  --redoTarget' <- lookupEnv "REDO_TARGET"
-  --case (redoTarget') of 
-  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
-  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
-  hPutStrLn stderr $ "running redo-ifchange"
-  catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
-    putErrorStrLn $ "No such directory " ++ topDir </> dir
-    exitFailure)
-  upToDate' <- upToDate pathToTarget 
-  -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ runDoFile target
-  setCurrentDirectory topDir
-  where
-    (dir, target) = splitFileName pathToTarget
+redo_ifchange target = do upToDate' <- upToDate target 
+                          -- Try to run redo if out of date, if it fails, print an error message:
+                          unless upToDate' $ runDoFile target
 
 -- Run the do script:
 runDoFile :: FilePath -> IO ()
@@ -244,26 +235,26 @@ doPath target = listToMaybe `liftM` filterM doesFileExist candidates
                                           else []
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
+-- TODO: check the paths here... i am not sure it is looking in the correct redo for thingies.
 upToDate :: FilePath -> IO Bool
-upToDate pathToTarget = catch
+upToDate target = catch
   -- If the target does not exist, return then it is not up-to-date
   -- If the target exists, see if it's dependencies have changed
   -- If the target's dependencies have changed, it is not up-to-date
-  (do exists <- doesFileExist pathToTarget 
+  (do exists <- doesFileExist target 
       if exists then
         do depHashFiles <- getDirectoryContents hashDir
            let depFiles = filterDotFiles $ map unEscapseFilePath depHashFiles
            and `liftM` mapM depUpToDate depFiles
         else return False)
   (\(e :: IOException) -> return False)
-  where (dir, target) = splitFileName pathToTarget
-        hashDir = dir </> depHashDir target 
+  where hashDir = depHashDir target 
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: String -> IO Bool
         depUpToDate dep = catch
-          (do let depFile = dir </> dep
-              let hashFile = dir </> depHashFile target dep
+          (do let depFile = dep
+              let hashFile = depHashFile target dep
               oldHash <- withFile hashFile ReadMode hGetLine
               newHash <- computeHash depFile
               doScript <- doPath depFile
