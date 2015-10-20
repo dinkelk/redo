@@ -16,9 +16,9 @@ import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), Color
 import System.Console.GetOpt
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
-import System.Exit (ExitCode(..), exitWith)
+import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative)
-import System.IO (hPutStrLn, hPutStr, stderr, withFile, hGetLine, IOMode(..), hFileSize)
+import System.IO (hPutStrLn, hPutStr, stderr, stdout, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
 import Data.Bool (bool)
@@ -65,7 +65,18 @@ putRedoStatus depth file = do setConsoleColorDull Green
                               hPutStrLn stderr $ file
                               setConsoleDefault
 
-data Flag = Version | Help | DashX | DashV deriving Show
+printVersion = do hPutStrLn stdout $ "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
+                  exitSuccess
+
+printHelp programName options errs = if null errs then do hPutStrLn stdout $ helpStr programName options 
+                                                          exitSuccess
+                                                  else do ioError (userError (concat errs ++ (helpStr programName options)))
+
+helpStr programName options = usageInfo (header programName) options
+  where header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
+
+
+data Flag = Version | Help | DashX | DashV deriving (Eq,Ord,Enum,Show,Bounded) 
 
 -- Define program options:
 -- The arguments to Option are:
@@ -86,26 +97,28 @@ getOptions argv =
   case getOpt Permute options argv of
     (o,n,[]  ) -> return (o,n)
     (_,_,errs) -> do programName <- getProgName
-                     ioError (userError (concat errs ++ usageInfo (header programName) options))
-  where header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
+                     printHelp programName options errs 
 
 main :: IO ()
 main = do 
   args <- getArgs
+  progName <- getProgName
 
-  -- TODO: only run this parsin option if it is a top level call to redo or redo-ifchange
+  -- TODO: only run this parsing option if it is a top level call to redo or redo-ifchange
   -- Parse options, getting a list of option actions
-  options <- getOptions args
-  let (flags, targets) = options 
+  opts <- getOptions args
+  let (flags, targets) = opts 
   putWarningStrLn $ "flags  : " ++ show flags 
   putWarningStrLn $ "targets: " ++ show targets 
+
+  when (Version `elem` flags) printVersion
+  when (Help `elem` flags) (printHelp progName options [])
 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
   -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
   redoPath <- lookupEnv "REDO_PATH"  
   let targets2redo = if null targets && isNothing redoPath then ["all"] else targets 
   mapM_ redo targets2redo 
-  progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
   case (progName, redoTarget') of 
@@ -123,7 +136,7 @@ redo pathToTarget = do
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
-    exitWith $ ExitFailure 1)
+    exitFailure)
   upToDate' <- upToDate target
   -- Try to run redo if out of date, if it fails, print an error message:
   unless upToDate' $ maybe missingDo runDoFile =<< doPath target
