@@ -13,6 +13,7 @@ import Data.Maybe (listToMaybe, isNothing, fromJust)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
+import System.Console.GetOpt
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith)
@@ -64,14 +65,46 @@ putRedoStatus depth file = do setConsoleColorDull Green
                               hPutStrLn stderr $ file
                               setConsoleDefault
 
+data Flag = Version | Help | DashX | DashV deriving Show
+
+-- Define program options:
+-- The arguments to Option are:
+-- 1) list of short option characters
+-- 2) list of long option strings (without "--")
+-- 3) argument descriptor
+-- 4) explanation of option for user
+options :: [OptDescr Flag]
+options =
+  [ Option ['V','?']     ["version"] (NoArg Version)       "show version number"
+  , Option ['h','H']     ["help"]    (NoArg Help)          "show usage"
+  , Option ['x']         ["sh-x"]    (NoArg DashX)         "run .do file using sh with -x option"
+  , Option ['v']         ["sh-v"]    (NoArg DashV)         "run .do file using sh with -v option"
+  ]
+
+getOptions :: [String] -> IO ([Flag], [String])
+getOptions argv = 
+  case getOpt Permute options argv of
+    (o,n,[]  ) -> return (o,n)
+    (_,_,errs) -> do programName <- getProgName
+                     ioError (userError (concat errs ++ usageInfo (header programName) options))
+  where header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
+
 main :: IO ()
 main = do 
+  args <- getArgs
+
+  -- TODO: only run this parsin option if it is a top level call to redo or redo-ifchange
+  -- Parse options, getting a list of option actions
+  options <- getOptions args
+  let (flags, targets) = options 
+  putWarningStrLn $ "flags  : " ++ show flags 
+  putWarningStrLn $ "targets: " ++ show targets 
+
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
   -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
-  args <- getArgs
   redoPath <- lookupEnv "REDO_PATH"  
-  let args2redo = if null args && isNothing redoPath then ["all"] else args
-  mapM_ redo args2redo 
+  let targets2redo = if null targets && isNothing redoPath then ["all"] else targets 
+  mapM_ redo targets2redo 
   progName <- getProgName
   redoTarget' <- lookupEnv "REDO_TARGET"
   -- if the program name is redo-ifchange, then update the dependency hashes:
