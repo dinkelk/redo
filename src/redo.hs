@@ -9,7 +9,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
 import Data.List (concatMap)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (listToMaybe, isNothing, fromJust)
+import Data.Maybe (listToMaybe, isNothing, fromJust, isJust)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
@@ -119,40 +119,62 @@ main = do
   -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
   redoPath <- lookupEnv "REDO_PATH"  
   let targets2redo = if null targets && isNothing redoPath then ["all"] else targets 
-  mapM_ redo targets2redo 
-  redoTarget' <- lookupEnv "REDO_TARGET"
-  -- if the program name is redo-ifchange, then update the dependency hashes:
-  case (progName, redoTarget') of 
-    ("redo-ifchange", Just redoTarget) -> mapM_ (storeHash redoTarget) =<< getArgs
-    ("redo-ifchange", Nothing) -> putErrorStrLn "Missing REDO_TARGET environment variable."
-    ("redo-ifcreate", _) -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+
+  -- Perform the proper action based on the program name:
+  case (progName) of 
+    ("redo") -> mapM_ redo targets2redo 
+    ("redo-ifchange") -> do mapM_ redo_ifchange targets2redo
+                            when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
+    ("redo-ifcreate") -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
     _ -> return ()
 
 redo :: FilePath -> IO ()
 redo pathToTarget = do 
   topDir <- getCurrentDirectory
-  redoTarget' <- lookupEnv "REDO_TARGET"
+  --redoTarget' <- lookupEnv "REDO_TARGET"
   --case (redoTarget') of 
   --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
+  hPutStrLn stderr $ "running redo"
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitFailure)
-  upToDate' <- upToDate target
-  -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ maybe missingDo runDoFile =<< doPath target
+  runDoFile target
   setCurrentDirectory topDir
   where
     (dir, target) = splitFileName pathToTarget
+
+redo_ifchange :: FilePath -> IO ()
+redo_ifchange pathToTarget = do 
+  topDir <- getCurrentDirectory
+  --redoTarget' <- lookupEnv "REDO_TARGET"
+  --case (redoTarget') of 
+  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
+  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
+  hPutStrLn stderr $ "running redo-ifchange"
+  catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
+    putErrorStrLn $ "No such directory " ++ topDir </> dir
+    exitFailure)
+  upToDate' <- upToDate pathToTarget 
+  -- Try to run redo if out of date, if it fails, print an error message:
+  unless upToDate' $ runDoFile target
+  setCurrentDirectory topDir
+  where
+    (dir, target) = splitFileName pathToTarget
+
+-- Run the do script:
+runDoFile :: FilePath -> IO ()
+runDoFile target = do maybe missingDo runDoFile' =<< doPath target
+  where
     -- Print missing do file error:
     missingDo = do
       -- TODO: we should not need the line below, we should just error. we just need to not error if the
       -- call is redo-ifchange, not redo
       exists <- doesFileExist target -- should be deleted for redo, and included for redo-ifchange
-      unless exists $ putErrorStrLn $ "No .do file found for target '" ++ pathToTarget ++ "'"
-    -- Run the do script:
-    runDoFile :: FilePath -> IO ()
-    runDoFile doFile = do
+      unless exists $ putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+    
+    runDoFile' doFile = do 
       -- Print what we are currently "redoing"
       currentDir <- getCurrentDirectory
       redoPath' <- lookupEnv "REDO_PATH"  
@@ -161,7 +183,6 @@ redo pathToTarget = do
       let absoluteTargetPath = (currentDir </> target)
       let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
       --putErrorStrLn $ "redo path:            " ++ redoPath 
-      --putErrorStrLn $ "path to target:       " ++ pathToTarget
       --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
       putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
 
@@ -190,6 +211,7 @@ redo pathToTarget = do
       -- Remove the temporary files:
       safeRemoveFile tmp3
       safeRemoveFile tmpStdout
+
     -- Dependency meta data directory for storing md5 hashes 
     metaDepsDir = depHashDir target
     -- Temporary file names:
