@@ -41,21 +41,22 @@ setConsoleBold = do hSetSGR stderr [SetConsoleIntensity BoldIntensity]
 setConsoleFaint = do hSetSGR stderr [SetConsoleIntensity FaintIntensity]
 setConsoleColorDull color = do hSetSGR stderr [SetColor Foreground Dull color] 
 
+-- Put string to console in color:
 putColorStrLn :: Color -> String -> IO ()
 putColorStrLn color string = do setConsoleColor color
                                 setConsoleBold 
                                 hPutStrLn stderr $ string
                                 setConsoleDefault 
 
+-- Put info, warning, error strings to console:
 putInfoStrLn :: String -> IO ()
 putInfoStrLn string = putColorStrLn Green string
-
 putWarningStrLn :: String -> IO ()
 putWarningStrLn string = putColorStrLn Yellow string
-
 putErrorStrLn :: String -> IO ()
 putErrorStrLn string = putColorStrLn Red string
 
+-- Special function to format and print the redo status message of what is being built:
 putRedoStatus :: Int -> String -> IO ()
 putRedoStatus depth file = do setConsoleColorDull Green 
                               setConsoleFaint
@@ -65,18 +66,18 @@ putRedoStatus depth file = do setConsoleColorDull Green
                               hPutStrLn stderr $ file
                               setConsoleDefault
 
+-- Print the program version and license information:
+printVersion :: IO ()
 printVersion = do hPutStrLn stdout $ "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
                   exitSuccess
 
+-- Print the program's help details:
+printHelp :: [Char] -> [OptDescr a] -> [[Char]] -> IO b
 printHelp programName options errs = if null errs then do hPutStrLn stdout $ helpStr programName options 
                                                           exitSuccess
                                                   else do ioError (userError (concat errs ++ (helpStr programName options)))
-
-helpStr programName options = usageInfo (header programName) options
-  where header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
-
-
-data Flag = Version | Help | DashX | DashV deriving (Eq,Ord,Enum,Show,Bounded) 
+  where helpStr programName options = usageInfo (header programName) options
+        header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
 
 -- Define program options:
 -- The arguments to Option are:
@@ -84,6 +85,7 @@ data Flag = Version | Help | DashX | DashV deriving (Eq,Ord,Enum,Show,Bounded)
 -- 2) list of long option strings (without "--")
 -- 3) argument descriptor
 -- 4) explanation of option for user
+data Flag = Version | Help | DashX | DashV deriving (Eq,Ord,Enum,Show,Bounded) 
 options :: [OptDescr Flag]
 options =
   [ Option ['V','?']     ["version"] (NoArg Version)       "show version number"
@@ -92,6 +94,7 @@ options =
   , Option ['v']         ["sh-v"]    (NoArg DashV)         "run .do file using sh with -v option"
   ]
 
+-- Helper function to get parse through commandline arguments and return options:
 getOptions :: [String] -> IO ([Flag], [String])
 getOptions argv = 
   case getOpt Permute options argv of
@@ -99,6 +102,7 @@ getOptions argv =
     (_,_,errs) -> do programName <- getProgName
                      printHelp programName options errs 
 
+-- Main function:
 main :: IO ()
 main = do 
   args <- getArgs
@@ -108,9 +112,6 @@ main = do
   -- Parse options, getting a list of option actions
   opts <- getOptions args
   let (flags, targets) = opts 
-  putWarningStrLn $ "flags  : " ++ show flags 
-  putWarningStrLn $ "targets: " ++ show targets 
-
   when (Version `elem` flags) printVersion
   when (Help `elem` flags) (printHelp progName options [])
 
