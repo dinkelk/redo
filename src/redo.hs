@@ -7,7 +7,7 @@ import Control.Monad (filterM, liftM, unless, guard, when)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
-import Data.List (concatMap)
+import Data.List (concatMap, intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (listToMaybe, isNothing, fromJust, isJust)
 import Debug.Trace (traceShow)
@@ -108,12 +108,17 @@ main = do
   args <- getArgs
   progName <- getProgName
 
-  -- TODO: only run this parsing option if it is a top level call to redo or redo-ifchange
-  -- Parse options, getting a list of option actions
+  -- Parse options, getting a list of option actions:
   opts <- getOptions args
   let (flags, targets) = opts 
+  -- Show help or version information if asked:
   when (Version `elem` flags) printVersion
   when (Help `elem` flags) (printHelp progName options [])
+  -- If there are shell args, set an environment variable that can be used by all
+  -- redo calls after this.
+  let shellArgs = intercalate "" $ [if DashX `elem` flags then "x" else "",
+                                    if DashV `elem` flags then "v" else ""]
+  unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
   -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
@@ -123,8 +128,8 @@ main = do
 
   -- Perform the proper action based on the program name:
   case (progName) of 
-    ("redo") -> mapM_ (performActionInTargetDir redo) targets2redo 
-    ("redo-ifchange") -> do mapM_ (performActionInTargetDir redo_ifchange) targets2redo
+    ("redo") -> mapM_ (performActionInTargetDir (redo)) targets2redo 
+    ("redo-ifchange") -> do mapM_ (performActionInTargetDir (redo_ifchange)) targets2redo
                             when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
     ("redo-ifcreate") -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
     _ -> return ()
@@ -166,49 +171,43 @@ runDoFile target doFile = do
   currentDir <- getCurrentDirectory
   redoPath' <- lookupEnv "REDO_PATH"  
   redoDepth' <- lookupEnv "REDO_DEPTH"
+  shellArgs' <- lookupEnv "REDO_SHELL_ARGS"
   let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
   let absoluteTargetPath = (currentDir </> target)
   let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
+  let shellArgs = if (isNothing shellArgs') then "" else fromJust shellArgs'
+
   --putErrorStrLn $ "redo path:            " ++ redoPath 
   --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
   putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
+  
+  -- Create the meta deps dir:
+  createMetaDepsDir target
 
-  -- Create meta data folder:
-  catchJust (guard . isDoesNotExistError)
-            (removeDirectoryRecursive metaDepsDir)
-            (\_ -> return())
-  createDirectoryIfMissing True metaDepsDir 
   -- Write out .do script as dependency:
   storeHash target doFile
+
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_PATH" redoPath 
                       $ insert "REDO_TARGET" target 
+                      $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
+  (_, _, _, processHandle) <- createProcess $ (shell $ shellCmd shellArgs doFile target) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> catch (renameFile tmp3 target) handler1
     ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
-                           removeTempFiles
+                           removeTempFiles target
                            exitWith $ ExitFailure code
   -- Remove the temporary files:
-  removeTempFiles
+  removeTempFiles target
   where
-    -- Dependency meta data directory for storing md5 hashes 
-    metaDepsDir = depHashDir target
     -- Temporary file names:
-    tmp3 = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-    tmpStdout = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
-    -- Pass redo script 3 arguments:
-    -- $1 - the target name
-    -- $2 - the target basename
-    -- $3 - the temporary target name
-    command doFile = unwords ["sh -e", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
-    removeTempFiles = do safeRemoveFile tmp3
-                         safeRemoveFile tmpStdout
+    tmp3 = tmp3File target 
+    tmpStdout = tmpStdoutFile target 
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
@@ -219,6 +218,32 @@ runDoFile target doFile = do
     handler2 :: SomeException -> IO ()
     handler2 ex = putErrorStrLn "Redo could not copy results from temporary file"
 
+
+-- Create meta data folder for storing md5 hashes:
+createMetaDepsDir target = do
+  catchJust (guard . isDoesNotExistError)
+            (removeDirectoryRecursive metaDepsDir)
+            (\_ -> return())
+  createDirectoryIfMissing True metaDepsDir 
+  where
+    metaDepsDir = depHashDir target
+
+-- Pass redo script 3 arguments:
+-- $1 - the target name
+-- $2 - the target basename
+-- $3 - the temporary target name
+shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
+                                             doFile, target, takeBaseName target, tmp3File target, 
+                                             ">", tmpStdoutFile target]
+
+-- Temporary file names:
+tmp3File target = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmpStdoutFile target = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
+
+-- Remove the temporary files created for a target:
+removeTempFiles target = do safeRemoveFile $ tmp3File target
+                            safeRemoveFile $ tmpStdoutFile target
+                     
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveFile :: FilePath -> IO ()
 safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
@@ -231,7 +256,6 @@ doPath target = listToMaybe `liftM` filterM doesFileExist candidates
                                           else []
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
--- TODO: check the paths here... i am not sure it is looking in the correct redo for thingies.
 upToDate :: FilePath -> IO Bool
 upToDate target = catch
   -- If the target does not exist, return then it is not up-to-date

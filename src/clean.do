@@ -1,3 +1,3 @@
 #!/bin/sh
 
-rm -f *.hi *.o redo redo-ifchange redo-install
+rm -f *.hi *.o redo redo-ifchange install redo-ifcreate
