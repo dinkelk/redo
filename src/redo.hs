@@ -146,63 +146,57 @@ performActionInTargetDir action pathToTarget = do
   where
     (dir, target) = splitFileName pathToTarget
 
+-- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo target = do runDoFile target
+redo target = do maybe missingDo (runDoFile target) =<< doPath target
+  where missingDo = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
 
+-- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redo_ifchange :: FilePath -> IO ()
 redo_ifchange target = do upToDate' <- upToDate target 
                           -- Try to run redo if out of date, if it fails, print an error message:
-                          unless upToDate' $ runDoFile target
+                          unless upToDate' $ maybe missingDo (runDoFile target) =<< doPath target
+  where missingDo = do exists <- doesFileExist target 
+                       unless exists $ putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
 
 -- Run the do script:
-runDoFile :: FilePath -> IO ()
-runDoFile target = do maybe missingDo runDoFile' =<< doPath target
+runDoFile :: String -> FilePath -> IO () 
+runDoFile target doFile = do 
+  -- Print what we are currently "redoing"
+  currentDir <- getCurrentDirectory
+  redoPath' <- lookupEnv "REDO_PATH"  
+  redoDepth' <- lookupEnv "REDO_DEPTH"
+  let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
+  let absoluteTargetPath = (currentDir </> target)
+  let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
+  --putErrorStrLn $ "redo path:            " ++ redoPath 
+  --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
+  putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
+
+  -- Create meta data folder:
+  catchJust (guard . isDoesNotExistError)
+            (removeDirectoryRecursive metaDepsDir)
+            (\_ -> return())
+  createDirectoryIfMissing True metaDepsDir 
+  -- Write out .do script as dependency:
+  storeHash target doFile
+  -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
+  oldEnv <- getEnvironment
+  let newEnv = toList $ adjust (++ ":.") "PATH" 
+                      $ insert "REDO_DEPTH" redoDepth
+                      $ insert "REDO_PATH" redoPath 
+                      $ insert "REDO_TARGET" target 
+                      $ fromList oldEnv
+  (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
+  exit <- waitForProcess processHandle
+  case exit of  
+    ExitSuccess -> catch (renameFile tmp3 target) handler1
+    ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
+                           removeTempFiles
+                           exitWith $ ExitFailure code
+  -- Remove the temporary files:
+  removeTempFiles
   where
-    -- Print missing do file error:
-    missingDo = do
-      -- TODO: we should not need the line below, we should just error. we just need to not error if the
-      -- call is redo-ifchange, not redo
-      exists <- doesFileExist target -- should be deleted for redo, and included for redo-ifchange
-      unless exists $ putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
-    
-    runDoFile' doFile = do 
-      -- Print what we are currently "redoing"
-      currentDir <- getCurrentDirectory
-      redoPath' <- lookupEnv "REDO_PATH"  
-      redoDepth' <- lookupEnv "REDO_DEPTH"
-      let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
-      let absoluteTargetPath = (currentDir </> target)
-      let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
-      --putErrorStrLn $ "redo path:            " ++ redoPath 
-      --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
-      putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
-
-      -- Create meta data folder:
-      catchJust (guard . isDoesNotExistError)
-                (removeDirectoryRecursive metaDepsDir)
-                (\_ -> return())
-      createDirectoryIfMissing True metaDepsDir 
-      -- Write out .do script as dependency:
-      storeHash target doFile
-      -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
-      oldEnv <- getEnvironment
-      let newEnv = toList $ adjust (++ ":.") "PATH" 
-                          $ insert "REDO_DEPTH" redoDepth
-                          $ insert "REDO_PATH" redoPath 
-                          $ insert "REDO_TARGET" target 
-                          $ fromList oldEnv
-      (_, _, _, processHandle) <- createProcess $ (shell $ command doFile) {env = Just newEnv}
-      exit <- waitForProcess processHandle
-      case exit of  
-        ExitSuccess -> catch (renameFile tmp3 target) handler1
-        ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
-                               safeRemoveFile tmp3
-                               safeRemoveFile tmpStdout
-                               exitWith $ ExitFailure code
-      -- Remove the temporary files:
-      safeRemoveFile tmp3
-      safeRemoveFile tmpStdout
-
     -- Dependency meta data directory for storing md5 hashes 
     metaDepsDir = depHashDir target
     -- Temporary file names:
@@ -213,6 +207,8 @@ runDoFile target = do maybe missingDo runDoFile' =<< doPath target
     -- $2 - the target basename
     -- $3 - the temporary target name
     command doFile = unwords ["sh -e", doFile, target, takeBaseName target, tmp3, ">", tmpStdout]
+    removeTempFiles = do safeRemoveFile tmp3
+                         safeRemoveFile tmpStdout
     -- If renaming the tmp3 fails, let's try renaming tmpStdout:
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
