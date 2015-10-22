@@ -9,7 +9,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
 import Data.List (concatMap, intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (listToMaybe, isNothing, fromJust, isJust)
+import Data.Maybe (listToMaybe, isNothing, fromJust, isJust, fromMaybe)
 import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
@@ -17,7 +17,7 @@ import System.Console.GetOpt
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative)
+import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative, dropExtension, dropExtensions, takeExtensions)
 import System.IO (hPutStrLn, hPutStr, stderr, stdout, withFile, hGetLine, IOMode(..), hFileSize)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), StdStream(..), CmdSpec(..))
@@ -35,48 +35,48 @@ deriving instance Show CmdSpec
 metaDir = ".redo"
 
 -- Set colors and write some text in those colors.
-setConsoleDefault = do hSetSGR stderr [Reset]
-setConsoleColor color = do hSetSGR stderr [SetColor Foreground Vivid color] 
-setConsoleBold = do hSetSGR stderr [SetConsoleIntensity BoldIntensity]
-setConsoleFaint = do hSetSGR stderr [SetConsoleIntensity FaintIntensity]
-setConsoleColorDull color = do hSetSGR stderr [SetColor Foreground Dull color] 
+setConsoleDefault = hSetSGR stderr [Reset]
+setConsoleColor color = hSetSGR stderr [SetColor Foreground Vivid color] 
+setConsoleBold = hSetSGR stderr [SetConsoleIntensity BoldIntensity]
+setConsoleFaint = hSetSGR stderr [SetConsoleIntensity FaintIntensity]
+setConsoleColorDull color = hSetSGR stderr [SetColor Foreground Dull color] 
 
 -- Put string to console in color:
 putColorStrLn :: Color -> String -> IO ()
 putColorStrLn color string = do setConsoleColor color
                                 setConsoleBold 
-                                hPutStrLn stderr $ string
+                                hPutStrLn stderr string
                                 setConsoleDefault 
 
 -- Put info, warning, error strings to console:
 putInfoStrLn :: String -> IO ()
-putInfoStrLn string = putColorStrLn Green string
+putInfoStrLn = putColorStrLn Green 
 putWarningStrLn :: String -> IO ()
-putWarningStrLn string = putColorStrLn Yellow string
+putWarningStrLn = putColorStrLn Yellow 
 putErrorStrLn :: String -> IO ()
-putErrorStrLn string = putColorStrLn Red string
+putErrorStrLn = putColorStrLn Red 
 
 -- Special function to format and print the redo status message of what is being built:
 putRedoStatus :: Int -> String -> IO ()
 putRedoStatus depth file = do setConsoleColorDull Green 
                               setConsoleFaint
-                              hPutStr stderr $ "redo " ++ (foldr (++) "" $ replicate depth "  ") 
+                              hPutStr stderr $ "redo " ++ concat (replicate depth "  " )
                               setConsoleColor Green
                               setConsoleBold
-                              hPutStrLn stderr $ file
+                              hPutStrLn stderr file
                               setConsoleDefault
 
 -- Print the program version and license information:
 printVersion :: IO ()
-printVersion = do hPutStrLn stdout $ "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
+printVersion = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
                   exitSuccess
 
 -- Print the program's help details:
-printHelp :: [Char] -> [OptDescr a] -> [[Char]] -> IO b
-printHelp programName options errs = if null errs then do hPutStrLn stdout $ helpStr programName options 
+printHelp :: String -> [OptDescr a] -> [String] -> IO b
+printHelp programName options errs = if null errs then do putStrLn $ helpStr programName options 
                                                           exitSuccess
-                                                  else do ioError (userError (concat errs ++ (helpStr programName options)))
-  where helpStr programName options = usageInfo (header programName) options
+                                                  else ioError (userError (concat errs ++ helpStr programName options))
+  where helpStr programName = usageInfo (header programName) 
         header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
 
 -- Define program options:
@@ -116,8 +116,8 @@ main = do
   when (Help `elem` flags) (printHelp progName options [])
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
-  let shellArgs = intercalate "" $ [if DashX `elem` flags then "x" else "",
-                                    if DashV `elem` flags then "v" else ""]
+  let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
+                                  if DashV `elem` flags then "v" else ""]
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
@@ -127,11 +127,11 @@ main = do
   parentRedoTarget <- lookupEnv "REDO_TARGET"
 
   -- Perform the proper action based on the program name:
-  case (progName) of 
-    ("redo") -> mapM_ (performActionInTargetDir (redo)) targets2redo 
-    ("redo-ifchange") -> do mapM_ (performActionInTargetDir (redo_ifchange)) targets2redo
-                            when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
-    ("redo-ifcreate") -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
+  case progName of 
+    "redo" -> mapM_ (performActionInTargetDir redo) targets2redo 
+    "redo-ifchange" -> do mapM_ (performActionInTargetDir redoIfchange) targets2redo
+                          when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
+    "redo-ifcreate" -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
     _ -> return ()
 
 -- This applies a function to a target in the directory that that target it located in
@@ -153,14 +153,14 @@ performActionInTargetDir action pathToTarget = do
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo target = do maybe missingDo (runDoFile target) =<< doPath target
-  where missingDo = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+redo target = maybe missingDo (runDoFile target) =<< doPath target
+  where missingDo = putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
-redo_ifchange :: FilePath -> IO ()
-redo_ifchange target = do upToDate' <- upToDate target 
-                          -- Try to run redo if out of date, if it fails, print an error message:
-                          unless upToDate' $ maybe missingDo (runDoFile target) =<< doPath target
+redoIfchange :: FilePath -> IO ()
+redoIfchange target = do upToDate' <- upToDate target 
+                         -- Try to run redo if out of date, if it fails, print an error message:
+                         unless upToDate' $ maybe missingDo (runDoFile target) =<< doPath target
   where missingDo = do exists <- doesFileExist target 
                        unless exists $ putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
 
@@ -172,10 +172,10 @@ runDoFile target doFile = do
   redoPath' <- lookupEnv "REDO_PATH"  
   redoDepth' <- lookupEnv "REDO_DEPTH"
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"
-  let redoPath = if (isNothing redoPath') then currentDir else fromJust redoPath'
-  let absoluteTargetPath = (currentDir </> target)
-  let redoDepth = show $ (if (isNothing redoDepth') then 0 else (read (fromJust redoDepth') :: Int)) + 1
-  let shellArgs = if (isNothing shellArgs') then "" else fromJust shellArgs'
+  let redoPath = fromMaybe currentDir redoPath'
+  let absoluteTargetPath = currentDir </> target
+  let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
+  let shellArgs = fromMaybe "" shellArgs'
 
   --putErrorStrLn $ "redo path:            " ++ redoPath 
   --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
@@ -218,11 +218,11 @@ runDoFile target doFile = do
                       -- Usually this target won't exit anyways, but it might exist in the case
                       -- of a modified .do file that was generating something, and now is not! In this case we remove the 
                       -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-                      if (size > 0) then renameFile tmpStdout target else safeRemoveFile target)
+                      if size > 0 then renameFile tmpStdout target else safeRemoveFile target)
                   handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
-    handler2 ex = putErrorStrLn "Redo could not copy results from temporary file"
+    handler2 ex = putErrorStrLn $ "Redo could not copy results from temporary file '" ++ tmpStdout ++ "'"
 
 
 -- Create meta data folder for storing md5 hashes:
@@ -239,8 +239,8 @@ createMetaDepsDir target = do
 -- $2 - the target basename
 -- $3 - the temporary target name
 shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
-                                             doFile, target, takeBaseName target, tmp3File target, 
-                                             ">", tmpStdoutFile target]
+                                             show doFile, show target, show $ dropExtensions target, show $ tmp3File target, 
+                                             ">", show $ tmpStdoutFile target]
 
 -- Temporary file names:
 tmp3File target = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
@@ -257,9 +257,12 @@ safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
 -- Take file path of target and return file path of redo script:
 doPath :: FilePath -> IO (Maybe FilePath)
 doPath target = listToMaybe `liftM` filterM doesFileExist candidates
-  where candidates =  (target ++ ".do") : if hasExtension target 
-                                          then [replaceBaseName target "default" ++ ".do"] 
-                                          else []
+  where candidates = (target ++ ".do") : map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions target)
+        getDefaultDo :: FilePath -> [FilePath]
+        getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
+          where smallfilename = dropExtension filename
+                basefilename = dropExtensions filename
+                dropFirstExtension filename = basefilename ++ takeExtensions (drop 1 (takeExtensions filename))
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
