@@ -212,7 +212,13 @@ runDoFile target doFile = do
     handler1 :: SomeException -> IO ()
     handler1 ex = catch 
                   (do size <- fileSize tmpStdout
-                      when (size > 0) $ renameFile tmpStdout target)
+                      -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
+                      -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
+                      -- target should be created. This is our way of denoting the file as correctly build! 
+                      -- Usually this target won't exit anyways, but it might exist in the case
+                      -- of a modified .do file that was generating something, and now is not! In this case we remove the 
+                      -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
+                      if (size > 0) then renameFile tmpStdout target else safeRemoveFile target)
                   handler2
     -- Renaming totally failed, lets alert the user:
     handler2 :: SomeException -> IO ()
