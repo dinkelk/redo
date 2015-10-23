@@ -151,10 +151,14 @@ performActionInTargetDir action pathToTarget = do
   where
     (dir, target) = splitFileName pathToTarget
 
+-- Missing do error function:
+noDoFileError :: FilePath -> IO()
+noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+                          exitFailure
+
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo target = maybe missingDo (runDoFile target) =<< doPath target
-  where missingDo = putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+redo target = maybe (noDoFileError target) (runDoFile target) =<< doPath target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfchange :: FilePath -> IO ()
@@ -162,7 +166,7 @@ redoIfchange target = do upToDate' <- upToDate target
                          -- Try to run redo if out of date, if it fails, print an error message:
                          unless upToDate' $ maybe missingDo (runDoFile target) =<< doPath target
   where missingDo = do exists <- doesFileExist target 
-                       unless exists $ putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+                       unless exists $ noDoFileError target
 
 -- Run the do script:
 runDoFile :: String -> FilePath -> IO () 
