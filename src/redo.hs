@@ -248,6 +248,7 @@ runDoFile target doFile = do
 
 
 -- Create meta data folder for storing md5 hashes:
+createMetaDepsDir :: FilePath -> IO ()
 createMetaDepsDir target = do
   catchJust (guard . isDoesNotExistError)
             (removeDirectoryRecursive metaDepsDir)
@@ -260,15 +261,19 @@ createMetaDepsDir target = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
+shellCmd :: String -> FilePath -> FilePath -> String
 shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
                                              show doFile, show target, show $ dropExtensions target, show $ tmp3File target, 
                                              ">", show $ tmpStdoutFile target]
 
 -- Temporary file names:
+tmp3File :: FilePath -> FilePath
 tmp3File target = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmpStdoutFile :: FilePath -> FilePath
 tmpStdoutFile target = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
+removeTempFiles :: FilePath -> IO ()
 removeTempFiles target = do safeRemoveFile $ tmp3File target
                             safeRemoveFile $ tmpStdoutFile target
                      
@@ -330,20 +335,27 @@ upToDate target = catch
         depHashFiles2DepFiles deps = filterDotFiles $ map unEscapseFilePath deps
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
-        depUpToDate :: String -> IO Bool
+        depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dep
               let hashFile = depHashFile target dep
               oldHash <- withFile hashFile ReadMode hGetLine
               newHash <- computeHash depFile
-              doScript <- doPath depFile
-              case doScript of
-                Nothing -> return (oldHash == newHash)
-                Just _ -> do upToDate' <- upToDate depFile
-                             return $ (oldHash == newHash) && upToDate')
+              -- If the dependency is not up-to-date, then return false
+              -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
+              let depIsUpToDate = (oldHash == newHash)
+              if not depIsUpToDate then return False
+              else do upToDate' <- upToDate depFile
+                      return upToDate')
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
+-- TODO Make first character in file determine whether the dependency is a redo-ifchange,
+-- redo-ifcreate, or redo-always dependency
+-- ie something like: 
+-- ~ redo-always
+-- % redo-ifcreate
+-- @ redo-ifchange
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
 #define dependency_prepend '@'
