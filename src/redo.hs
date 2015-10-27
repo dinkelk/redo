@@ -14,7 +14,7 @@ import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
 import System.Console.GetOpt
-import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory, doesDirectoryExist)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (replaceBaseName, hasExtension, takeBaseName, (</>), splitFileName, isPathSeparator, pathSeparator, makeRelative, dropExtension, dropExtensions, takeExtensions)
@@ -132,6 +132,7 @@ main = do
     "redo-ifchange" -> do mapM_ (performActionInTargetDir redoIfchange) targets2redo
                           when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
     "redo-ifcreate" -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
+    "redo-always" -> putWarningStrLn "Sorry, redo-always not yet supported."
     _ -> return ()
 
 -- This applies a function to a target in the directory that that target it located in
@@ -146,8 +147,12 @@ performActionInTargetDir action pathToTarget = do
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitFailure)
-  action target
-  setCurrentDirectory topDir
+
+  tryingToBuildSource' <- tryingToBuildSource target 
+  if tryingToBuildSource' then exitFailure
+  else do
+   action target
+   setCurrentDirectory topDir
   where
     (dir, target) = splitFileName pathToTarget
 
@@ -155,6 +160,15 @@ performActionInTargetDir action pathToTarget = do
 noDoFileError :: FilePath -> IO()
 noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
                           exitFailure
+
+tryingToBuildSource target = do
+  isSource <- isSourceFile target
+  redoPath <- lookupEnv "REDO_PATH"  
+  if isSource && (isNothing redoPath || null (fromJust redoPath)) then do
+     putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
+     putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
+     return True 
+  else return False
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
@@ -268,20 +282,73 @@ doPath target = listToMaybe `liftM` filterM doesFileExist candidates
                 basefilename = dropExtensions filename
                 dropFirstExtension filename = basefilename ++ takeExtensions (drop 1 (takeExtensions filename))
 
+doesTargetExist :: FilePath -> IO Bool
+doesTargetExist target = do 
+  -- hPutStrLn stderr $ "Is " ++ target ++ " uptodate?"
+  fileExists <- doesFileExist target 
+  dirExists <- doesDirectoryExist target
+  -- hPutStrLn stderr $ "file exists? " ++ show fileExists
+  -- hPutStrLn stderr $ "dir exists? " ++ show dirExists
+  return (fileExists || dirExists)
+
+-- Checks if a target file is a buildable target, or if it is a source file
+isSourceFile :: FilePath -> IO Bool
+isSourceFile target = do
+  targetExists <- doesTargetExist target
+  if targetExists then doesTargetHaveDeps else return False
+  where hashDir = depHashDir target 
+        doesTargetHaveDeps = do 
+          hashDirExists <- doesDirectoryExist hashDir
+          if hashDirExists then return False else return True
+          -- If the file exists, but there is no dep info, then this
+          -- file is not a build-able target file.
+         -- else do 
+         --   -- TODO... fix when this prints... it is getting caught in recursive loop...
+         --   -- probably need to move this out of the function... and only print it under the following conditions
+         --   -- redo or redo-ifchange, first call, and only if called on actual target, not dependencies of target
+         --   redoPath <- lookupEnv "REDO_PATH"  
+         --   if (isNothing redoPath || null (fromJust redoPath)) then do
+         --     putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
+         --     putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
+         --     return True 
+         --   else do 
+         --     --putWarningStrLn $ "huh?" ++ fromJust redoPath
+         --     return True
+  
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
 upToDate target = catch
   -- If the target does not exist, return then it is not up-to-date
   -- If the target exists, see if it's dependencies have changed
   -- If the target's dependencies have changed, it is not up-to-date
-  (do exists <- doesFileExist target 
-      if exists then
-        do depHashFiles <- getDirectoryContents hashDir
-           let depFiles = filterDotFiles $ map unEscapseFilePath depHashFiles
-           and `liftM` mapM depUpToDate depFiles
-        else return False)
+--  (do -- hPutStrLn stderr $ "Is " ++ target ++ " uptodate?"
+--      fileExists <- doesFileExist target 
+--      dirExists <- doesDirectoryExist target
+--      -- hPutStrLn stderr $ "file exists? " ++ show fileExists
+--      -- hPutStrLn stderr $ "dir exists? " ++ show dirExists
+--      if fileExists || dirExists then catch
+--        (do depHashFiles <- getDirectoryContents hashDir
+--            and `liftM` mapM depUpToDate (depHashFiles2DepFiles depHashFiles))
+--        -- If the file exists, but there is no dep info, then this
+--        -- file is not a build-able target file.
+--        (\e -> do redoPath <- lookupEnv "REDO_PATH"  
+--                  if (isNothing redoPath || null (fromJust redoPath)) then do 
+--                    putWarningStrLn $ target ++ ": exists and is not a buildable file. Not redoing."
+--                    putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
+--                    return (isDoesNotExistError e) 
+--                  else do putWarningStrLn $ "huh?" ++ fromJust redoPath
+--                          return (isDoesNotExistError e))
+--      else return False)
+--  (\(e :: IOException) -> return False)
+
+  (do isSource <- isSourceFile target
+      if isSource then return True 
+      else do 
+        depHashFiles <- getDirectoryContents hashDir
+        and `liftM` mapM depUpToDate (depHashFiles2DepFiles depHashFiles))
   (\(e :: IOException) -> return False)
-  where hashDir = depHashDir target 
+  where hashDir = depHashDir target
+        depHashFiles2DepFiles deps = filterDotFiles $ map unEscapseFilePath deps
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: String -> IO Bool
