@@ -332,7 +332,7 @@ upToDate target = catch
           and `liftM` mapM depUpToDate (depHashFiles2DepFiles depHashFiles))
   (\(e :: IOException) -> return False)
   where hashDir = depHashDir target
-        depHashFiles2DepFiles deps = filterDotFiles $ map unEscapseFilePath deps
+        depHashFiles2DepFiles deps = filterDotFiles $ map unEscapeIfChangePath deps
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: FilePath -> IO Bool
@@ -350,25 +350,42 @@ upToDate target = catch
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
--- TODO Make first character in file determine whether the dependency is a redo-ifchange,
--- redo-ifcreate, or redo-always dependency
--- ie something like: 
+-- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
+#define seperator_replacement '^'
+#define seperator_replacement_escape '@'
+-- We use different file prepends to denote different kinds of dependencies:
 -- ~ redo-always
 -- % redo-ifcreate
 -- @ redo-ifchange
--- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
-#define seperator_replacement '^'
-#define dependency_prepend '@'
-#define seperator_replacement_escape '@'
+#define ifchange_dependency_prepend '@'
+#define ifcreate_dependency_prepend '%'
+#define always_dependency_prepend '~'
+
+-- Functions to escape and unescape dependencies of different types:
+escapeIfChangePath :: FilePath -> FilePath 
+escapeIfChangePath = escapeDependencyPath ifchange_dependency_prepend
+unEscapeIfChangePath :: FilePath -> FilePath 
+unEscapeIfChangePath = unEscapeDependencyPath ifchange_dependency_prepend
+
+escapeIfCreatePath :: FilePath -> FilePath 
+escapeIfCreatePath = escapeDependencyPath ifcreate_dependency_prepend
+unEscapeIfCreatePath :: FilePath -> FilePath 
+unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
+
+escapeAlwaysPath :: FilePath -> FilePath 
+escapeAlwaysPath = escapeDependencyPath always_dependency_prepend
+unEscapeAlwaysPath :: FilePath -> FilePath 
+unEscapeAlwaysPath = unEscapeDependencyPath always_dependency_prepend
+
 -- Takes a file path and replaces all </> with @
-escapeFilePath :: FilePath -> String
-escapeFilePath path = [dependency_prepend] ++ concatMap repl path
+escapeDependencyPath :: Char -> FilePath -> FilePath
+escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) ++ concatMap repl path
   where repl seperator_replacement = [seperator_replacement] ++ [seperator_replacement_escape]
         repl c   = if isPathSeparator c then [seperator_replacement] else [c]
 
 -- Reverses escapeFilePath
-unEscapseFilePath :: String -> String
-unEscapseFilePath name = if head name == dependency_prepend then unEscape $ tail name else name
+unEscapeDependencyPath :: Char -> FilePath -> FilePath
+unEscapeDependencyPath dependency_prepend name = if take 2 name == (['.'] ++ [dependency_prepend]) then unEscape $ drop 2 name else name
   where 
     unEscape [] = []
     unEscape string = first : unEscape rest
@@ -398,7 +415,7 @@ depHashDir target = metaDir </> (".__" ++ target ++ "__")
 
 -- Form the hash file path for a target's dependency given the current target and its dependency
 depHashFile :: String -> FilePath -> FilePath
-depHashFile target dep = depHashDir target </> escapeFilePath dep
+depHashFile target dep = depHashDir target </> escapeIfChangePath dep
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
