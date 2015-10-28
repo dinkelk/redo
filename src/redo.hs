@@ -57,7 +57,7 @@ putErrorStrLn :: String -> IO ()
 putErrorStrLn = putColorStrLn Red 
 
 -- Special function to format and print the redo status message of what is being built:
-putRedoStatus :: Int -> String -> IO ()
+putRedoStatus :: Int -> FilePath -> IO ()
 putRedoStatus depth file = do setConsoleColorDull Green 
                               setConsoleFaint
                               hPutStr stderr $ "redo " ++ concat (replicate depth "  " )
@@ -121,19 +121,30 @@ main = do
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
-  -- This is the top-level (first) call to redo by if REDO_PATH does not yet exist.
-  redoPath <- lookupEnv "REDO_PATH"  
-  let targets2redo = if null targets && isNothing redoPath then ["all"] else targets 
   parentRedoTarget <- lookupEnv "REDO_TARGET"
+  let runFromDoFile = isJust parentRedoTarget
+  let targets2redo = if null targets && not runFromDoFile then ["all"] else targets 
+  let runActionIfInsideDoFile action = if runFromDoFile then action else runOutsideDoError progName
 
   -- Perform the proper action based on the program name:
   case progName of 
     "redo" -> mapM_ (performActionInTargetDir redo) targets2redo 
     "redo-ifchange" -> do mapM_ (performActionInTargetDir redoIfChange) targets2redo
-                          when (isJust parentRedoTarget) ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
-    "redo-ifcreate" -> putWarningStrLn "Sorry, redo-ifcreate is not yet supported."
-    "redo-always" -> putWarningStrLn "Sorry, redo-always not yet supported."
+                          when runFromDoFile ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
+    "redo-ifcreate" -> runActionIfInsideDoFile $ mapM_ createEmptyDepFile (map (ifCreateDepFile $ fromJust parentRedoTarget) targets)
+    "redo-always" -> runActionIfInsideDoFile $ createEmptyDepFile $ alwaysDepFile (fromJust parentRedoTarget)
     _ -> return ()
+
+-- Returns true if program was invoked from within a .do file, false if run from commandline
+isRunFromDoFile :: IO Bool
+isRunFromDoFile = do 
+  -- This is the top-level (first) call to redo by if REDO_TARGET does not yet exist.
+  redoTarget <- lookupEnv "REDO_TARGET"  
+  if( isNothing redoTarget || null (fromJust redoTarget) ) then return False else return True
+
+-- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
+runOutsideDoError :: String -> IO ()
+runOutsideDoError program = putWarningStrLn $ "'" ++ program ++ "' can only be invoked inside of a .do file."
 
 -- This applies a function to a target in the directory that that target it located in
 -- then it returns the current directory to the starting directory:
@@ -162,9 +173,9 @@ performActionInTargetDir action pathToTarget = do
 tryingToBuildSource :: FilePath -> IO Bool
 tryingToBuildSource target = do
   isSource <- isSourceFile target
-  redoPath <- lookupEnv "REDO_PATH"
+  runFromDoFile <- isRunFromDoFile
   -- Only return true if the file is marked as source, and this is the top level call to redo or redo-ifchange
-  if isSource && (isNothing redoPath || null (fromJust redoPath)) then do
+  if isSource && not runFromDoFile then do
      putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
      putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
      return True 
@@ -182,12 +193,16 @@ redoIfChange target = do upToDate' <- upToDate target
   where missingDo = do exists <- doesFileExist target 
                        unless exists $ noDoFileError target
 
+--redoIfCreate :: FilePath -> IO ()
+--redoIfCreate target = 
+
+
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
 noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
                           exitFailure
 -- Run the do script:
-runDoFile :: String -> FilePath -> IO () 
+runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Print what we are currently "redoing"
   currentDir <- getCurrentDirectory
@@ -255,7 +270,7 @@ createMetaDepsDir target = do
             (\_ -> return())
   createDirectoryIfMissing True metaDepsDir 
   where
-    metaDepsDir = depHashDir target
+    metaDepsDir = depFileDir target
 
 -- Pass redo script 3 arguments:
 -- $1 - the target name
@@ -312,7 +327,7 @@ hasDependencies :: FilePath -> IO Bool
 hasDependencies target = do 
   hashDirExists <- doesDirectoryExist hashDir
   if hashDirExists then return False else return True
-  where hashDir = depHashDir target
+  where hashDir = depFileDir target
   
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
@@ -331,14 +346,14 @@ upToDate target = catch
           depHashFiles <- getDirectoryContents hashDir
           and `liftM` mapM depUpToDate (depHashFiles2DepFiles depHashFiles))
   (\(e :: IOException) -> return False)
-  where hashDir = depHashDir target
+  where hashDir = depFileDir target
         depHashFiles2DepFiles deps = filterDotFiles $ map unEscapeIfChangePath deps
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dep
-              let hashFile = depHashFile target dep
+              let hashFile = ifChangeDepFile target dep
               oldHash <- withFile hashFile ReadMode hGetLine
               newHash <- computeHash depFile
               -- If the dependency is not up-to-date, then return false
@@ -372,10 +387,10 @@ escapeIfCreatePath = escapeDependencyPath ifcreate_dependency_prepend
 unEscapeIfCreatePath :: FilePath -> FilePath 
 unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 
-escapeAlwaysPath :: FilePath -> FilePath 
-escapeAlwaysPath = escapeDependencyPath always_dependency_prepend
-unEscapeAlwaysPath :: FilePath -> FilePath 
-unEscapeAlwaysPath = unEscapeDependencyPath always_dependency_prepend
+escapeAlwaysPath :: FilePath
+escapeAlwaysPath = escapeDependencyPath always_dependency_prepend "redo-always"
+unEscapeAlwaysPath :: FilePath
+unEscapeAlwaysPath = unEscapeDependencyPath always_dependency_prepend "redo-always"
 
 -- Takes a file path and replaces all </> with @
 escapeDependencyPath :: Char -> FilePath -> FilePath
@@ -403,20 +418,38 @@ computeHash file = (show . md5) `liftM` BL.readFile file
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
-storeHash :: String -> FilePath -> IO ()
+storeHash :: FilePath -> FilePath -> IO ()
 storeHash target dep = catch
   ( do hash <- computeHash dep
-       writeFile (depHashFile target dep) hash )
+       writeFile (ifChangeDepFile target dep) hash )
+  (\(e :: SomeException) -> return ())
+
+-- Creation of an empty dep file for redo-always and redo-ifcreate
+createEmptyDepFile depMetaFile = catch
+  ( do putWarningStrLn $ "writing to file: " ++ depMetaFile
+       writeFile depMetaFile "." 
+       putWarningStrLn $ "done")
   (\(e :: SomeException) -> return ())
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
-depHashDir :: String -> FilePath 
-depHashDir target = metaDir </> (".__" ++ target ++ "__")
+depFileDir :: FilePath -> FilePath 
+depFileDir target = metaDir </> (".__" ++ target ++ "__")
 
 -- Form the hash file path for a target's dependency given the current target and its dependency
-depHashFile :: String -> FilePath -> FilePath
-depHashFile target dep = depHashDir target </> escapeIfChangePath dep
+depFile :: (FilePath -> FilePath) -> FilePath -> FilePath -> FilePath
+depFile escapeFunc target dep = depFileDir target </> escapeFunc dep
+
+-- Functions to get the dependency path for each file type
+ifChangeDepFile :: FilePath -> FilePath -> FilePath
+ifChangeDepFile = depFile escapeIfChangePath
+ifCreateDepFile :: FilePath -> FilePath -> FilePath
+ifCreateDepFile = depFile escapeIfCreatePath
+alwaysDepFile :: FilePath -> FilePath
+alwaysDepFile target = depFileDir target </> escapeAlwaysPath
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
+
+
+-- TODO... remove deps directory if .do file has changed. helps with ifcreate that are deleted.
