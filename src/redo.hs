@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
 
+import Control.Applicative ((<$>))
 import Control.Monad (filterM, liftM, unless, guard, when)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
@@ -329,6 +330,17 @@ hasDependencies target = do
   if hashDirExists then return False else return True
   where hashDir = depFileDir target
   
+-- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
+#define seperator_replacement '^'
+#define seperator_replacement_escape '@'
+-- We use different file prepends to denote different kinds of dependencies:
+-- ~ redo-always
+-- % redo-ifcreate
+-- @ redo-ifchange
+#define ifchange_dependency_prepend '@'
+#define ifcreate_dependency_prepend '%'
+#define always_dependency_prepend '~'
+
 -- Returns true if all dependencies are up-to-date, false otherwise.
 upToDate :: FilePath -> IO Bool
 upToDate target = catch
@@ -344,12 +356,29 @@ upToDate target = catch
           -- Otherwise, we check the target's dependencies to see if they have changed
           -- If the target's dependenvies have changed, then the target is not up-to-date
           depHashFiles <- getDirectoryContents hashDir
-          and `liftM` mapM depUpToDate (depHashFiles2DepFiles depHashFiles))
+          -- Now we need to split up the file types and do different actions for each type:
+          -- redo-always - we need to return False immediately
+          if any (fileHasPrepend always_dependency_prepend) depHashFiles then return False
+          else do 
+            -- redo-ifcreate - if one of those files was created, we need to return False immediately
+            let ifCreateDeps = filter (fileHasPrepend ifcreate_dependency_prepend) depHashFiles
+            depCreated' <- and `liftM` mapM depCreated (depHashFiles2DepFiles ifCreateDeps)
+            if depCreated' then return False
+            else do 
+              -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
+              --                 then recursively check their dependencies to see if they are up to date
+              let ifChangeDeps = filter (fileHasPrepend ifchange_dependency_prepend) depHashFiles
+              and `liftM` mapM depUpToDate (depHashFiles2DepFiles ifChangeDeps))
   (\(e :: IOException) -> return False)
-  where hashDir = depFileDir target
+  where fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
+        hashDir = depFileDir target
         depHashFiles2DepFiles deps = filterDotFiles $ map unEscapeIfChangePath deps
         filterDotFiles :: [FilePath] -> [FilePath]
         filterDotFiles = filter (\a -> a /= ".." && a /= ".")
+        depCreated :: FilePath -> IO Bool
+        depCreated dep = do --id <$> doesFileExist dep 
+          a <- doesFileExist dep
+          return a 
         depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dep
@@ -364,17 +393,6 @@ upToDate target = catch
                       return upToDate')
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
-
--- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
-#define seperator_replacement '^'
-#define seperator_replacement_escape '@'
--- We use different file prepends to denote different kinds of dependencies:
--- ~ redo-always
--- % redo-ifcreate
--- @ redo-ifchange
-#define ifchange_dependency_prepend '@'
-#define ifcreate_dependency_prepend '%'
-#define always_dependency_prepend '~'
 
 -- Functions to escape and unescape dependencies of different types:
 escapeIfChangePath :: FilePath -> FilePath 
