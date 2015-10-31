@@ -80,6 +80,13 @@ printHelp programName options errs = if null errs then do putStrLn $ helpStr pro
   where helpStr programName = usageInfo (header programName) 
         header progName = "Usage: " ++ progName ++ " [OPTION...] targets..."
 
+-- Returns true if program was invoked from within a .do file, false if run from commandline
+isRunFromDoFile :: IO Bool
+isRunFromDoFile = do 
+  -- This is the top-level (first) call to redo by if REDO_TARGET does not yet exist.
+  redoTarget <- lookupEnv "REDO_TARGET"  
+  if( isNothing redoTarget || null (fromJust redoTarget) ) then return False else return True
+
 -- Define program options:
 -- The arguments to Option are:
 -- 1) list of short option characters
@@ -121,64 +128,73 @@ main = do
                                   if DashV `elem` flags then "v" else ""]
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
-  -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
-  -- Note: All target listed here are relative to the current directory in the .do script. This could
-  -- be different than the REDO_PATH variable the represents the directory where the .do was invoked, if 'cd' is
-  -- used in the .do script.
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  let runFromDoFile = isJust parentRedoTarget
-  let targets2redo = if null targets && not runFromDoFile then ["all"] else targets 
-  let runActionIfInsideDoFile action = if runFromDoFile then action else runOutsideDoError progName
+  -- Check if redo is being run from inside of a .do file, or if this is the top level run
+  -- Run the correct main accordingly
+  runFromDoFile <- isRunFromDoFile
+  let mainToRun = if runFromDoFile then mainDo else mainTop
+  mainToRun progName targets
 
-  -- All dependencies for the parent target should be stored in a .redo file in the
-  -- parent target .do file invocation location.
-  -- Note: REDO_PATH can vary from the current directory if the .do file uses 'cd'
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  currentDir <- getCurrentDirectory
-  -- Calculate the targets relative to the REDO_PATH
-  let targetsRel2Parent = if runFromDoFile then map ((makeRelative $ fromJust parentRedoPath) . (currentDir </>)) targets else []
-  --let theDir = (fst . splitFileName) $ head targetsRel2Parent
-  -- putWarningStrLn $ "targetsRel2Parent: " ++ show targetsRel2Parent
-  -- putWarningStrLn $ "targets: " ++ show targets
-  --putWarningStrLn $ "theDir: " ++ theDir
-
-  -- TODO: split this up, so there is two seperate paths for inDoFile vs notInDoFile
-
+-- The main function for redo run at a top level (outside of a .do file)
+mainTop :: String -> [FilePath] -> IO()
+mainTop progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (performActionInTargetDir $ runActionIfBuildable redo) targets2redo 
+    "redo" -> mapM_ (performActionInTargetDir $ runActionIfBuildable redo) targets'
+    -- Run redo-ifchange only on buildable files from the target's directory
+    "redo-ifchange" -> do mapM_ (performActionInTargetDir $ runActionIfBuildable redoIfChange) targets
+    -- redo-ifcreate and redo-always should only be run inside of a .do file
+    "redo-ifcreate" -> runOutsideDoError progName 
+    "redo-always" -> runOutsideDoError progName 
+    _ -> return ()
+  where
+    -- If just 'redo' is run, then assume the default target as 'all'
+    targets' = if null targets then ["all"] else targets
+
+    -- This applies a function to a target if the target is not marked as a source file:
+    runActionIfBuildable :: (FilePath -> IO ()) -> FilePath -> IO ()
+    runActionIfBuildable action target = do 
+      -- If the user is trying to build a source file, then exit with an error
+      -- else, continue to run the action on the target
+      isSource <- isSourceFile target
+      if isSource then do 
+        putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
+        putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
+        exitFailure
+      else do
+       action target
+       return ()
+   
+    -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
+    runOutsideDoError :: String -> IO ()
+    runOutsideDoError program = putWarningStrLn $ "'" ++ program ++ "' can only be invoked inside of a .do file."
+
+-- The main function for redo run within a .do file
+mainDo :: String -> [FilePath] -> IO()
+mainDo progName targets = do
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  currentDir <- getCurrentDirectory
+  -- All dependencies for the parent target should be stored in a .redo file in the
+  -- parent target .do file invocation location.
+  -- Note: All target listed here are relative to the current directory in the .do script. This could
+  -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
+  -- if 'cd' was used in the .do script.
+  -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
+  let targetsRel2Parent = map ((makeRelative $ fromJust parentRedoPath) . (currentDir </>)) targets
+  -- Perform the proper action based on the program name:
+  case progName of 
+    -- Run redo only on buildable files from the target's directory
+    "redo" -> mapM_ (performActionInTargetDir $ redo) targets 
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do mapM_ (performActionInTargetDir $ runActionIfBuildable redoIfChange) targets2redo
-                          when runFromDoFile ( mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent)
+    "redo-ifchange" -> do mapM_ (performActionInTargetDir $ redoIfChange) targets
+                          mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
-    "redo-ifcreate" -> runActionIfInsideDoFile $ mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
+    "redo-ifcreate" -> mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
     -- Store a redo-always dependency for the parent target in the parent target's directory
-    "redo-always" -> runActionIfInsideDoFile $ performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
+    "redo-always" -> performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
     _ -> return ()
-   
--- Returns true if program was invoked from within a .do file, false if run from commandline
-isRunFromDoFile :: IO Bool
-isRunFromDoFile = do 
-  -- This is the top-level (first) call to redo by if REDO_TARGET does not yet exist.
-  redoTarget <- lookupEnv "REDO_TARGET"  
-  if( isNothing redoTarget || null (fromJust redoTarget) ) then return False else return True
-
--- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
-runOutsideDoError :: String -> IO ()
-runOutsideDoError program = putWarningStrLn $ "'" ++ program ++ "' can only be invoked inside of a .do file."
-
--- This applies a function to a target if the target is not marked as a source file:
-runActionIfBuildable :: (FilePath -> IO ()) -> FilePath -> IO ()
-runActionIfBuildable action target = do 
-  -- If the user is trying to build a source file, then exit with an error
-  -- else, continue to run the action on the target
-  tryingToBuildSource' <- tryingToBuildSource target 
-  if tryingToBuildSource' then exitFailure
-  else do
-   action target
-   return ()
 
 -- This applies a function to a target in the directory that that target it located in
 -- then it returns the current directory to the starting directory:
@@ -197,7 +213,6 @@ performActionInTargetDir action pathToTarget = do
   where
     (dir, target) = splitFileName pathToTarget
 
-
 -- This applies a function to a target in the directory that that target it located in
 -- then it returns the current directory to the starting directory:
 -- performActionInDir :: (FilePath -> IO ()) -> FilePath -> FilePath -> IO ()
@@ -212,18 +227,6 @@ performActionInDir dir action target = do
     exitFailure)
   action target
   setCurrentDirectory topDir
-
--- Is the user accidentally trying to build a source file?:
-tryingToBuildSource :: FilePath -> IO Bool
-tryingToBuildSource target = do
-  isSource <- isSourceFile target
-  runFromDoFile <- isRunFromDoFile
-  -- Only return true if the file is marked as source, and this is the top level call to redo or redo-ifchange
-  if isSource && not runFromDoFile then do
-     putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
-     putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
-     return True 
-  else return False
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
