@@ -196,26 +196,9 @@ mainDo progName targets = do
     "redo-always" -> performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
     _ -> return ()
 
--- This applies a function to a target in the directory that that target it located in
--- then it returns the current directory to the starting directory:
-performActionInTargetDir :: (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInTargetDir action pathToTarget = do
-  topDir <- getCurrentDirectory
-  --redoTarget' <- lookupEnv "REDO_TARGET"
-  --case (redoTarget') of 
-  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
-  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
-  catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
-    putErrorStrLn $ "No such directory " ++ topDir </> dir
-    exitFailure)
-  action target
-  setCurrentDirectory topDir
-  where
-    (dir, target) = splitFileName pathToTarget
-
--- This applies a function to a target in the directory that that target it located in
--- then it returns the current directory to the starting directory:
--- performActionInDir :: (FilePath -> IO ()) -> FilePath -> FilePath -> IO ()
+-- This applies a function to a target in the directory provided and then
+-- returns the current directory to the starting directory:
+performActionInDir :: FilePath -> (FilePath -> IO ()) -> FilePath -> IO ()
 performActionInDir dir action target = do
   topDir <- getCurrentDirectory
   --redoTarget' <- lookupEnv "REDO_TARGET"
@@ -223,10 +206,18 @@ performActionInDir dir action target = do
   --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
-    putErrorStrLn $ "No such directory " ++ topDir </> dir
+    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
     exitFailure)
   action target
   setCurrentDirectory topDir
+
+-- This applies a function to a target in the directory that that target it located in
+-- then it returns the current directory to the starting directory:
+performActionInTargetDir :: (FilePath -> IO ()) -> FilePath -> IO ()
+performActionInTargetDir action pathToTarget = do
+  performActionInDir dir action target
+  where
+    (dir, target) = splitFileName pathToTarget
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
@@ -307,8 +298,9 @@ runDoFile target doFile = do
     handler2 :: SomeException -> IO ()
     handler2 ex = putErrorStrLn $ "Redo could not copy results from temporary file '" ++ tmpStdout ++ "'"
 
-
 -- Create meta data folder for storing md5 hashes:
+-- Note: this function also blows out the old directory, which is good news because we don't want old
+-- dependencies hanging around if we are rebuilding a file.
 createMetaDepsDir :: FilePath -> IO ()
 createMetaDepsDir target = do
   catchJust (guard . isDoesNotExistError)
@@ -488,7 +480,7 @@ writeDepFile :: FilePath -> FilePath -> IO ()
 writeDepFile file contents = catch
   ( do writeFile file contents )
   (\(e :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'. If this happens, there is a bug in redo :("
+                               putErrorStrLn $ "Internal redo error: Encountered problen writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'."
                                exitFailure)
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate
@@ -515,6 +507,3 @@ alwaysDepFile target = depFileDir target </> escapeAlwaysPath
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
-
-
--- TODO... remove deps directory if .do file has changed. helps with ifcreate that are deleted.
