@@ -122,20 +122,42 @@ main = do
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
   -- Get the arguments to redo, if there are none, and this is top level call, use the default target "all"
+  -- Note: All target listed here are relative to the current directory in the .do script. This could
+  -- be different than the REDO_PATH variable the represents the directory where the .do was invoked, if 'cd' is
+  -- used in the .do script.
   parentRedoTarget <- lookupEnv "REDO_TARGET"
   let runFromDoFile = isJust parentRedoTarget
   let targets2redo = if null targets && not runFromDoFile then ["all"] else targets 
   let runActionIfInsideDoFile action = if runFromDoFile then action else runOutsideDoError progName
 
+  -- All dependencies for the parent target should be stored in a .redo file in the
+  -- parent target .do file invocation location.
+  -- Note: REDO_PATH can vary from the current directory if the .do file uses 'cd'
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  currentDir <- getCurrentDirectory
+  -- Calculate the targets relative to the REDO_PATH
+  let targetsRel2Parent = if runFromDoFile then map ((makeRelative $ fromJust parentRedoPath) . (currentDir </>)) targets else []
+  --let theDir = (fst . splitFileName) $ head targetsRel2Parent
+  -- putWarningStrLn $ "targetsRel2Parent: " ++ show targetsRel2Parent
+  -- putWarningStrLn $ "targets: " ++ show targets
+  --putWarningStrLn $ "theDir: " ++ theDir
+
+  -- TODO: split this up, so there is two seperate paths for inDoFile vs notInDoFile
+
   -- Perform the proper action based on the program name:
   case progName of 
-    "redo" -> mapM_ (performActionInTargetDir redo) targets2redo 
-    "redo-ifchange" -> do mapM_ (performActionInTargetDir redoIfChange) targets2redo
-                          when runFromDoFile ( mapM_ (storeHash $ fromJust parentRedoTarget) targets )
-    "redo-ifcreate" -> runActionIfInsideDoFile $ mapM_ createEmptyDepFile (map (ifCreateDepFile $ fromJust parentRedoTarget) targets)
-    "redo-always" -> runActionIfInsideDoFile $ createEmptyDepFile $ alwaysDepFile (fromJust parentRedoTarget)
+    -- Run redo only on buildable files from the target's directory
+    "redo" -> mapM_ (performActionInTargetDir $ runActionIfBuildable redo) targets2redo 
+    -- Run redo-ifchange only on buildable files from the target's directory
+    -- Next store hash information for the parent target from the parent target's directory (current directory)
+    "redo-ifchange" -> do mapM_ (performActionInTargetDir $ runActionIfBuildable redoIfChange) targets2redo
+                          when runFromDoFile ( mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent)
+    -- Store redo-ifcreate dependencies for each target in the parent target's directory
+    "redo-ifcreate" -> runActionIfInsideDoFile $ mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
+    -- Store a redo-always dependency for the parent target in the parent target's directory
+    "redo-always" -> runActionIfInsideDoFile $ performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
     _ -> return ()
-
+   
 -- Returns true if program was invoked from within a .do file, false if run from commandline
 isRunFromDoFile :: IO Bool
 isRunFromDoFile = do 
@@ -146,6 +168,17 @@ isRunFromDoFile = do
 -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
 runOutsideDoError :: String -> IO ()
 runOutsideDoError program = putWarningStrLn $ "'" ++ program ++ "' can only be invoked inside of a .do file."
+
+-- This applies a function to a target if the target is not marked as a source file:
+runActionIfBuildable :: (FilePath -> IO ()) -> FilePath -> IO ()
+runActionIfBuildable action target = do 
+  -- If the user is trying to build a source file, then exit with an error
+  -- else, continue to run the action on the target
+  tryingToBuildSource' <- tryingToBuildSource target 
+  if tryingToBuildSource' then exitFailure
+  else do
+   action target
+   return ()
 
 -- This applies a function to a target in the directory that that target it located in
 -- then it returns the current directory to the starting directory:
@@ -159,16 +192,26 @@ performActionInTargetDir action pathToTarget = do
   catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
     putErrorStrLn $ "No such directory " ++ topDir </> dir
     exitFailure)
-
-  -- If the user is trying to build a source file, then exit with an error
-  -- else, continue to run the action on the target
-  tryingToBuildSource' <- tryingToBuildSource target 
-  if tryingToBuildSource' then exitFailure
-  else do
-   action target
-   setCurrentDirectory topDir
+  action target
+  setCurrentDirectory topDir
   where
     (dir, target) = splitFileName pathToTarget
+
+
+-- This applies a function to a target in the directory that that target it located in
+-- then it returns the current directory to the starting directory:
+-- performActionInDir :: (FilePath -> IO ()) -> FilePath -> FilePath -> IO ()
+performActionInDir dir action target = do
+  topDir <- getCurrentDirectory
+  --redoTarget' <- lookupEnv "REDO_TARGET"
+  --case (redoTarget') of 
+  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
+  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
+  catch (setCurrentDirectory dir) (\(e :: SomeException) -> do 
+    putErrorStrLn $ "No such directory " ++ topDir </> dir
+    exitFailure)
+  action target
+  setCurrentDirectory topDir
 
 -- Is the user accidentally trying to build a source file?:
 tryingToBuildSource :: FilePath -> IO Bool
@@ -194,10 +237,6 @@ redoIfChange target = do upToDate' <- upToDate target
   where missingDo = do exists <- doesFileExist target 
                        unless exists $ noDoFileError target
 
---redoIfCreate :: FilePath -> IO ()
---redoIfCreate target = 
-
-
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
 noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
@@ -207,29 +246,32 @@ runDoFile :: FilePath -> FilePath -> IO ()
 runDoFile target doFile = do 
   -- Print what we are currently "redoing"
   currentDir <- getCurrentDirectory
-  redoPath' <- lookupEnv "REDO_PATH"  
-  redoDepth' <- lookupEnv "REDO_DEPTH"
-  shellArgs' <- lookupEnv "REDO_SHELL_ARGS"
-  let redoPath = fromMaybe currentDir redoPath'
+  redoPath' <- lookupEnv "REDO_PATH"          -- Path of current do file
+  redoInitPath' <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
+  redoDepth' <- lookupEnv "REDO_DEPTH"        -- Depth of recursion for this call to redo
+  shellArgs' <- lookupEnv "REDO_SHELL_ARGS"   -- Shell args passed to initial invokation of redo
+  let redoPath = currentDir
+  let redoInitPath = fromMaybe currentDir redoInitPath'
   let absoluteTargetPath = currentDir </> target
   let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
   let shellArgs = fromMaybe "" shellArgs'
 
-  --putErrorStrLn $ "redo path:            " ++ redoPath 
+  --putErrorStrLn $ "redo path:            " ++ redoInitPath 
   --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
-  putRedoStatus (read redoDepth :: Int) (makeRelative redoPath absoluteTargetPath)
+  putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
   
   -- Create the meta deps dir:
   createMetaDepsDir target
 
   -- Write out .do script as dependency:
-  storeHash target doFile
+  storeIfChangeDep target doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
+                      $ insert "REDO_PATH" redoPath
                       $ insert "REDO_DEPTH" redoDepth
-                      $ insert "REDO_PATH" redoPath 
+                      $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_TARGET" target 
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
@@ -237,7 +279,7 @@ runDoFile target doFile = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> catch (renameFile tmp3 target) handler1
-    ExitFailure code -> do putWarningStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
+    ExitFailure code -> do putErrorStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
                            removeTempFiles target
                            exitWith $ ExitFailure code
   -- Remove the temporary files:
@@ -345,7 +387,6 @@ hasDependencies target = do
 upToDate :: FilePath -> IO Bool
 upToDate target = catch
   (do exists <- doesTargetExist target 
-      isSource <- isSourceFile target
       -- If the target does not exist, then it is obviously not up-to-date, otherwise
       if not exists then return False
       else do
@@ -362,23 +403,18 @@ upToDate target = catch
           else do 
             -- redo-ifcreate - if one of those files was created, we need to return False immediately
             let ifCreateDeps = filter (fileHasPrepend ifcreate_dependency_prepend) depHashFiles
-            depCreated' <- and `liftM` mapM depCreated (depHashFiles2DepFiles ifCreateDeps)
+            depCreated' <- or `liftM` mapM (depCreated . unEscapeIfCreatePath) ifCreateDeps
             if depCreated' then return False
             else do 
               -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
               --                 then recursively check their dependencies to see if they are up to date
               let ifChangeDeps = filter (fileHasPrepend ifchange_dependency_prepend) depHashFiles
-              and `liftM` mapM depUpToDate (depHashFiles2DepFiles ifChangeDeps))
+              and `liftM` mapM (depUpToDate . unEscapeIfChangePath) ifChangeDeps)
   (\(e :: IOException) -> return False)
   where fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
         hashDir = depFileDir target
-        depHashFiles2DepFiles deps = filterDotFiles $ map unEscapeIfChangePath deps
-        filterDotFiles :: [FilePath] -> [FilePath]
-        filterDotFiles = filter (\a -> a /= ".." && a /= ".")
         depCreated :: FilePath -> IO Bool
-        depCreated dep = do --id <$> doesFileExist dep 
-          a <- doesFileExist dep
-          return a 
+        depCreated dep = do id <$> doesFileExist dep 
         depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
           (do let depFile = dep
@@ -430,24 +466,32 @@ unEscapeDependencyPath dependency_prepend name = if take 2 name == (['.'] ++ [de
                            else (pathSeparator, xs)
                       else (x, xs)
 
+storeIfChangeDep :: FilePath -> FilePath -> IO ()
+storeIfChangeDep target dep = do 
+  hash <- computeHash dep
+  writeDepFile (ifChangeDepFile target dep) hash
+storeIfCreateDep :: FilePath -> FilePath -> IO ()
+storeIfCreateDep target dep = createEmptyDepFile $ ifCreateDepFile target dep
+storeAlwaysDep :: FilePath -> IO ()
+storeAlwaysDep target = createEmptyDepFile $ alwaysDepFile target
+
 -- Calculate the hash of a file
 computeHash :: FilePath -> IO String
 computeHash file = (show . md5) `liftM` BL.readFile file
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
-storeHash :: FilePath -> FilePath -> IO ()
-storeHash target dep = catch
-  ( do hash <- computeHash dep
-       writeFile (ifChangeDepFile target dep) hash )
-  (\(e :: SomeException) -> return ())
+writeDepFile :: FilePath -> FilePath -> IO ()
+writeDepFile file contents = catch
+  ( do writeFile file contents )
+  (\(e :: SomeException) -> do cd <- getCurrentDirectory 
+                               putErrorStrLn $ "Error writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'. If this happens, there is a bug in redo :("
+                               exitFailure)
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate
-createEmptyDepFile depMetaFile = catch
-  ( do putWarningStrLn $ "writing to file: " ++ depMetaFile
-       writeFile depMetaFile "." 
-       putWarningStrLn $ "done")
-  (\(e :: SomeException) -> return ())
+-- note may need to make specific one for redoifcreate and redoalways
+createEmptyDepFile :: FilePath -> IO ()
+createEmptyDepFile file = writeDepFile file "." 
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
 depFileDir :: FilePath -> FilePath 
