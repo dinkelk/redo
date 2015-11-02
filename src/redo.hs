@@ -7,13 +7,13 @@ import Control.Monad (filterM, liftM, unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.List (intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (listToMaybe, isNothing, fromJust, fromMaybe)
+import Data.Maybe (isJust, listToMaybe, isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (canonicalizePath, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath ((</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
+import System.FilePath (takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -102,9 +102,9 @@ mainTop progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (performActionInTargetDir $ runActionIfBuildable redo) targets'
+    "redo" -> mapM_ (performActionInDoFileDir $ runActionIfBuildable redo) targets'
     -- Run redo-ifchange only on buildable files from the target's directory
-    "redo-ifchange" -> mapM_ (performActionInTargetDir $ runActionIfBuildable redoIfChange) targets
+    "redo-ifchange" -> mapM_ (performActionInDoFileDir $ runActionIfBuildable redoIfChange) targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -147,10 +147,10 @@ mainDo progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (performActionInTargetDir redo) targets 
+    "redo" -> mapM_ (performActionInDoFileDir redo) targets 
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do mapM_ (performActionInTargetDir redoIfChange) targets
+    "redo-ifchange" -> do mapM_ (performActionInDoFileDir redoIfChange) targets
                           mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
@@ -185,6 +185,17 @@ performActionInTargetDir :: (FilePath -> IO ()) -> FilePath -> IO ()
 performActionInTargetDir action pathToTarget = performActionInDir dir action target
   where
     (dir, target) = splitFileName pathToTarget
+
+-- This applies a function to a target in the directory that that target it located in
+-- then it returns the current directory to the starting directory:
+-- TODO: 1) checkout and debug the new default.do lookup function
+--       2) make sure that performActionInDoFileDir works
+--       3) Integrate this function with the existing logic for finding do files in redo and redoIfChange
+performActionInDoFileDir :: (FilePath -> IO ()) -> FilePath -> IO ()
+performActionInDoFileDir action target = do
+  doFile <- doPath target
+  if isJust doFile then performActionInDir (takeDirectory $ fromJust doFile) action target
+  else noDoFileError target
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
@@ -290,13 +301,29 @@ safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
 
 -- Take file path of target and return file path of redo script:
 doPath :: FilePath -> IO (Maybe FilePath)
-doPath target = listToMaybe `liftM` filterM doesFileExist candidates
-  where candidates = (target ++ ".do") : map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions target)
-        getDefaultDo :: FilePath -> [FilePath]
-        getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
-          where smallfilename = dropExtension filename
-                basefilename = dropExtensions filename
-                dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
+doPath target = do
+  targetDoExists <- doesFileExist targetDo
+  -- If the target do exists, then just return that, otherwise look for a suitable default.do
+  if targetDoExists then return $ Just targetDo
+  else defaultDoPath "."
+  where 
+    targetDo = target ++ ".do"
+    -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
+    -- found or "/" is reached.
+    defaultDoPath :: FilePath -> IO (Maybe FilePath)
+    defaultDoPath dir = do
+      absPath <- canonicalizePath dir
+      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
+      if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory dir 
+      else return doFile
+    -- List the possible default.do file candidates relative to the given path:
+    candidates path = map (path </>) $ map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions target)
+    -- Form all possible matching default.do files in order of preference:
+    getDefaultDo :: FilePath -> [FilePath]
+    getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
+      where smallfilename = dropExtension filename
+            basefilename = dropExtensions filename
+            dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
