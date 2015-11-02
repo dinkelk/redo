@@ -9,7 +9,7 @@ import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 import System.FilePath ((</>), isPathSeparator, pathSeparator)
 import System.IO (withFile, hGetLine, IOMode(..))
@@ -149,18 +149,36 @@ unEscapeDependencyPath dependency_prepend name = if take 2 name == (['.'] ++ [de
                            else (pathSeparator, xs)
                       else (x, xs)
 
+-- If the dependency exists then store
 storeIfChangeDep :: FilePath -> FilePath -> IO ()
-storeIfChangeDep target dep = do 
-  hash <- computeHash dep
-  writeDepFile (ifChangeDepFile target dep) hash
+storeIfChangeDep target dep = do
+  -- TODO: Not sure about this behavior... if the dep does not exist, which means that the .do file did NOT
+  -- generate an output, we do not compute the hash of the dep, because it does not exist. This essentially
+  -- removes it as a dependency... but I am not sure what else to do. The other option is to throw an error
+  -- here if the dep does not exist.
+  depExists <- doesTargetExist dep
+  if depExists then do
+    hash <- computeHash dep
+    writeDepFile (ifChangeDepFile target dep) hash
+  else do
+    putWarningStrLn $ "Warning: Could not store dependency for '" ++ target ++ "' on '" ++ dep ++ "' because '" ++ dep ++ "' does not exist."
+    putWarningStrLn $ "Make sure the .do which builds '" ++ dep ++ "' produces an output called '" ++ dep ++ "'."
+    return ()
+
 storeIfCreateDep :: FilePath -> FilePath -> IO ()
 storeIfCreateDep target dep = createEmptyDepFile $ ifCreateDepFile target dep
 storeAlwaysDep :: FilePath -> IO ()
 storeAlwaysDep target = createEmptyDepFile $ alwaysDepFile target
 
--- Calculate the hash of a file
+-- Calculate the hash of a file. If the file is a directory,
+-- then return the timestamp instead.
 computeHash :: FilePath -> IO String
-computeHash file = (show . md5) `liftM` BL.readFile file
+computeHash file = do 
+  isDir <- doesDirectoryExist file
+  if isDir then do
+    timestamp <- getModificationTime file
+    return (show $ timestamp )
+  else (show . md5) `liftM` BL.readFile file
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
