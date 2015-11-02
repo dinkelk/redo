@@ -167,6 +167,12 @@ performActionInDir dir action target = do
   --case (redoTarget') of 
   --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
+  -- Hm, this is a bit weird. Need to support recursive upwards looking for default.do files.
+  -- We cannot cd into a directory that does not exist... but we should be able to use default do to run something like
+  -- redo dirThatWillSoonExist/theTarget. Currently, the cd into dirThatWillSoonExist to run .do will fail because it doesn't
+  -- exist.
+  -- In reality, we should first fine the correct .do file to run. Then we should cd to the directory of that .do file, then
+  -- we should run the .do file. TODO!
   catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
     putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
     exitFailure)

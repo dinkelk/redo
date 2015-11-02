@@ -98,7 +98,7 @@ upToDate target = catch
   where fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
         hashDir = depFileDir target
         depCreated :: FilePath -> IO Bool
-        depCreated dep = id <$> doesFileExist dep 
+        depCreated dep = id <$> doesTargetExist dep 
         depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
           (do let hashFile = ifChangeDepFile target dep
