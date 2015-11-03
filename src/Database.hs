@@ -1,17 +1,18 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, storeAlwaysDep, upToDate)  where
+module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, storeAlwaysDep, upToDate, findDoFile)  where
 
 import Control.Applicative ((<$>))
-import Control.Monad (liftM, guard)
+import Control.Monad (liftM, guard, filterM)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
+import Data.Maybe (isNothing, listToMaybe, fromJust)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (canonicalizePath, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
-import System.FilePath ((</>), isPathSeparator, pathSeparator)
+import System.FilePath ((</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, isPathSeparator, pathSeparator)
 import System.IO (withFile, hGetLine, IOMode(..))
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 
@@ -26,12 +27,11 @@ metaDir = ".redo"
 -- dependencies hanging around if we are rebuilding a file.
 createMetaDepsDir :: FilePath -> IO ()
 createMetaDepsDir target = do
+  metaDepsDir <- depFileDir target
   catchJust (guard . isDoesNotExistError)
             (removeDirectoryRecursive metaDepsDir)
             (\_ -> return())
   createDirectoryIfMissing True metaDepsDir 
-  where
-    metaDepsDir = depFileDir target
 
 -- Does the target file or directory exist on the filesystem.
 doesTargetExist :: FilePath -> IO Bool
@@ -47,14 +47,19 @@ doesTargetExist target = do
 isSourceFile :: FilePath -> IO Bool
 isSourceFile target = do
   targetExists <- doesTargetExist target
-  if targetExists then hasDependencies target else return False
+  if targetExists then fmap not (hasDependencies target) else return False
 
 -- Check's if a target has dependencies stored already
 hasDependencies :: FilePath -> IO Bool
 hasDependencies target = do 
-  hashDirExists <- doesDirectoryExist hashDir
-  if hashDirExists then return False else return True
-  where hashDir = depFileDir target
+  putErrorStrLn $ "hasDependencies: target" ++ target
+  metaDepsDir <- depFileDir target
+  if isNothing metaDepsDir then return False
+  else do
+    metaDepsDirExists <- doesDirectoryExist $ fromJust metaDepsDir 
+    putErrorStrLn $ "metaDepsDir " ++ metaDepsDir
+    putErrorStrLn $ "exist " ++ show metaDepsDirExists
+    if metaDepsDirExists then return True else return False
   
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
@@ -68,6 +73,10 @@ hasDependencies target = do
 #define always_dependency_prepend '~'
 
 -- Returns true if all dependencies are up-to-date, false otherwise.
+-- TODO: depFileDir assumes that the deps for a given target are stored in the 
+-- same directory as that target. This is untrue. The deps for a given target
+-- should be stored in the same directory as the do file which made that target
+-- which is more often than not the same directory as the target
 upToDate :: FilePath -> IO Bool
 upToDate target = catch
   (do exists <- doesTargetExist target 
@@ -80,7 +89,8 @@ upToDate target = catch
         else do 
           -- Otherwise, we check the target's dependencies to see if they have changed
           -- If the target's dependenvies have changed, then the target is not up-to-date
-          depHashFiles <- getDirectoryContents hashDir
+          metaDepsDir <- depFileDir target
+          depHashFiles <- getDirectoryContents metaDepsDir
           -- Now we need to split up the file types and do different actions for each type:
           -- redo-always - we need to return False immediately
           if any (fileHasPrepend always_dependency_prepend) depHashFiles then return False
@@ -96,12 +106,11 @@ upToDate target = catch
               and `liftM` mapM (depUpToDate . unEscapeIfChangePath) ifChangeDeps)
   (\(_ :: IOException) -> return False)
   where fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
-        hashDir = depFileDir target
         depCreated :: FilePath -> IO Bool
         depCreated dep = id <$> doesTargetExist dep 
         depUpToDate :: FilePath -> IO Bool
         depUpToDate dep = catch
-          (do let hashFile = ifChangeDepFile target dep
+          (do hashFile <- ifChangeDepFile target dep
               oldHash <- withFile hashFile ReadMode hGetLine
               newHash <- computeHash dep
               -- If the dependency is not up-to-date, then return false
@@ -111,6 +120,38 @@ upToDate target = catch
               else upToDate dep)
           -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
+
+-- Take file path of target and return file path of redo script relative to the current
+-- directory.
+findDoFile :: FilePath -> IO (Maybe FilePath)
+findDoFile target = do
+  targetDoExists <- doesFileExist targetDo
+  cwd <- getCurrentDirectory
+  putWarningStrLn $ "target do: " ++ targetDo ++ " exists?: " ++ show targetDoExists
+  putWarningStrLn $ "current dir: " ++ cwd
+  -- If the target do exists, then just return that, otherwise look for a suitable default.do
+  if targetDoExists then return $ Just targetDo
+  else defaultDoPath "."
+  where 
+    targetDo = target ++ ".do"
+    -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
+    -- found or "/" is reached.
+    defaultDoPath :: FilePath -> IO (Maybe FilePath)
+    defaultDoPath dir = do
+      absPath' <- canonicalizePath dir
+      let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
+      putWarningStrLn $ "absPath: " ++ absPath
+      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
+      if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 
+      else return doFile
+    -- List the possible default.do file candidates relative to the given path:
+    candidates path = map (path </>) $ map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions target)
+    -- Form all possible matching default.do files in order of preference:
+    getDefaultDo :: FilePath -> [FilePath]
+    getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
+      where smallfilename = dropExtension filename
+            basefilename = dropExtensions filename
+            dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
 
 -- Functions to escape and unescape dependencies of different types:
 escapeIfChangePath :: FilePath -> FilePath 
@@ -159,16 +200,22 @@ storeIfChangeDep target dep = do
   depExists <- doesTargetExist dep
   if depExists then do
     hash <- computeHash dep
-    writeDepFile (ifChangeDepFile target dep) hash
+    depFile <- ifChangeDepFile target dep
+    writeDepFile depFile hash
   else do
     putWarningStrLn $ "Warning: Could not store dependency for '" ++ target ++ "' on '" ++ dep ++ "' because '" ++ dep ++ "' does not exist."
     putWarningStrLn $ "Make sure the .do which builds '" ++ dep ++ "' produces an output called '" ++ dep ++ "'."
     return ()
 
 storeIfCreateDep :: FilePath -> FilePath -> IO ()
-storeIfCreateDep target dep = createEmptyDepFile $ ifCreateDepFile target dep
+storeIfCreateDep target dep = do 
+  depFile <- ifCreateDepFile target dep
+  createEmptyDepFile depFile
+
 storeAlwaysDep :: FilePath -> IO ()
-storeAlwaysDep target = createEmptyDepFile $ alwaysDepFile target
+storeAlwaysDep target = do
+  depFile <- alwaysDepFile target
+  createEmptyDepFile depFile
 
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
@@ -195,17 +242,34 @@ createEmptyDepFile :: FilePath -> IO ()
 createEmptyDepFile file = writeDepFile file "." 
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
-depFileDir :: FilePath -> FilePath 
-depFileDir target = metaDir </> (".__" ++ target ++ "__")
+-- TODO: fix bad assumptions
+-- 1) .redo for target lies in the same directory as that target = FALSE, the .redo for a target
+--    is located where the .do file that built that target is
+-- 2) The name of the meta dir for the target is .__target__ = FALSE, this makes assumption number
+--    1. We need to escape the target name from the directory where the .do file is located. ie.
+--    something like this ".__path^to^target__
+depFileDir :: FilePath -> IO (Maybe FilePath)
+depFileDir target = do
+  doFile <- findDoFile target
+  if isNothing doFile then return Nothing
+  else do 
+    let doDir = takeDirectory $ fromJust doFile
+    return $ doDir </> metaDir </> (escapeDependencyPath '_' target)
+
+-- TODO: depFileDir is now a maybe.. so need to fix stuff.
 
 -- Form the hash file path for a target's dependency given the current target and its dependency
-depFile :: (FilePath -> FilePath) -> FilePath -> FilePath -> FilePath
-depFile escapeFunc target dep = depFileDir target </> escapeFunc dep
+depFile :: (FilePath -> FilePath) -> FilePath -> FilePath -> IO FilePath
+depFile escapeFunc target dep = do
+  metaDepsDir <- depFileDir target
+  return $ metaDepsDir </> escapeFunc dep
 
 -- Functions to get the dependency path for each file type
-ifChangeDepFile :: FilePath -> FilePath -> FilePath
+ifChangeDepFile :: FilePath -> FilePath -> IO FilePath
 ifChangeDepFile = depFile escapeIfChangePath
-ifCreateDepFile :: FilePath -> FilePath -> FilePath
+ifCreateDepFile :: FilePath -> FilePath -> IO FilePath
 ifCreateDepFile = depFile escapeIfCreatePath
-alwaysDepFile :: FilePath -> FilePath
-alwaysDepFile target = depFileDir target </> escapeAlwaysPath
+alwaysDepFile :: FilePath -> IO FilePath
+alwaysDepFile target = do
+  metaDepsDir <- depFileDir target
+  return $ metaDepsDir </> escapeAlwaysPath

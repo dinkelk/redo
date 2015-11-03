@@ -10,14 +10,15 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, listToMaybe, isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (canonicalizePath, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (canonicalizePath, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, makeAbsolute)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
+import System.FilePath (pathSeparator, takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
 
+-- TODO: replace all currentDir </> path to use makeAbsolute
 -- Local imports:
 import Database
 import PrettyPrint
@@ -102,9 +103,9 @@ mainTop progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (performActionInDoFileDir $ runActionIfBuildable redo) targets'
+    "redo" -> mapM_ (runActionIfBuildable redo) targets'
     -- Run redo-ifchange only on buildable files from the target's directory
-    "redo-ifchange" -> mapM_ (performActionInDoFileDir $ runActionIfBuildable redoIfChange) targets
+    "redo-ifchange" -> mapM_ (runActionIfBuildable redoIfChange) targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -147,10 +148,10 @@ mainDo progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (performActionInDoFileDir redo) targets 
+    "redo" -> mapM_ (redo) targets 
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do mapM_ (performActionInDoFileDir redoIfChange) targets
+    "redo-ifchange" -> do mapM_ (redoIfChange) targets
                           mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
@@ -192,22 +193,52 @@ performActionInTargetDir action pathToTarget = performActionInDir dir action tar
 --       2) make sure that performActionInDoFileDir works
 --       3) Integrate this function with the existing logic for finding do files in redo and redoIfChange
 performActionInDoFileDir :: (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInDoFileDir action target = do
-  doFile <- doPath target
+performActionInDoFileDir action pathToTarget = do
+  doFile <- findDoFile pathToTarget 
   if isJust doFile then performActionInDir (takeDirectory $ fromJust doFile) action target
-  else noDoFileError target
+  else noDoFileError pathToTarget 
+  where
+    (dir, target) = splitFileName pathToTarget
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo target = maybe (noDoFileError target) (runDoFile target) =<< doPath target
+redo pathToTarget = do
+  doFile' <- findDoFile pathToTarget 
+  if isNothing doFile' then noDoFileError pathToTarget
+  else do
+    doFileAbsolute <- makeAbsolute $ fromJust doFile'
+    let (doFileDir, doFile) = splitFileName doFileAbsolute
+    targetFileAbsolute <- makeAbsolute pathToTarget
+    let targetRel2Do = makeRelative doFileDir targetFileAbsolute
+    putErrorStrLn $ "targetRel2Do: " ++ targetRel2Do
+    putErrorStrLn $ "doFileDir: " ++ doFileDir
+    performActionInDir (doFileDir) (runDoFile targetRel2Do) doFile
+  where
+    -- TODO, this is bad too. We need to get the name of the target from the DoFile's directory... need function to create this!
+    (dir, target) = splitFileName pathToTarget
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
+-- TODO: uptoDate needs to be run first, then perform action in target do. these need to be intermingled for epic success
 redoIfChange :: FilePath -> IO ()
-redoIfChange target = do upToDate' <- upToDate target 
-                         -- Try to run redo if out of date, if it fails, print an error message:
-                         unless upToDate' $ maybe missingDo (runDoFile target) =<< doPath target
-  where missingDo = do exists <- doesFileExist target 
-                       unless exists $ noDoFileError target
+redoIfChange pathToTarget = do 
+  -- hmmm prob need to be in the directory here?
+  -- find do file for target, then go to that directory and see if it is up to date, if not, run the do file from that directory
+  -- wait a minute... what if there is not a do file for the target?... because it is source. OHH NOES! Circular dep, figure out
+  -- how to resolve.
+  upToDate' <- upToDate pathToTarget 
+  -- Try to run redo if out of date, if it fails, print an error message:
+  unless upToDate' $ do
+    doFile' <- findDoFile pathToTarget 
+    if isNothing doFile' then missingDo
+    else do
+      doFileAbsolute <- makeAbsolute $ fromJust doFile'
+      let (doFileDir, doFile) = splitFileName doFileAbsolute
+      targetFileAbsolute <- makeAbsolute pathToTarget
+      let targetRel2Do = makeRelative doFileDir targetFileAbsolute
+      performActionInDir (doFileDir) (runDoFile targetRel2Do) doFile
+  where
+    missingDo = do exists <- doesFileExist pathToTarget
+                   unless exists $ noDoFileError pathToTarget
 
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
@@ -298,32 +329,6 @@ removeTempFiles target = do safeRemoveFile $ tmp3File target
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveFile :: FilePath -> IO ()
 safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
-
--- Take file path of target and return file path of redo script:
-doPath :: FilePath -> IO (Maybe FilePath)
-doPath target = do
-  targetDoExists <- doesFileExist targetDo
-  -- If the target do exists, then just return that, otherwise look for a suitable default.do
-  if targetDoExists then return $ Just targetDo
-  else defaultDoPath "."
-  where 
-    targetDo = target ++ ".do"
-    -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
-    -- found or "/" is reached.
-    defaultDoPath :: FilePath -> IO (Maybe FilePath)
-    defaultDoPath dir = do
-      absPath <- canonicalizePath dir
-      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
-      if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory dir 
-      else return doFile
-    -- List the possible default.do file candidates relative to the given path:
-    candidates path = map (path </>) $ map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions target)
-    -- Form all possible matching default.do files in order of preference:
-    getDefaultDo :: FilePath -> [FilePath]
-    getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
-      where smallfilename = dropExtension filename
-            basefilename = dropExtensions filename
-            dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
