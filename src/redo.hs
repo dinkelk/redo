@@ -207,11 +207,12 @@ redo pathToTarget = do
   if isNothing doFile' then noDoFileError pathToTarget
   else do
     doFileAbsolute <- makeAbsolute $ fromJust doFile'
+    --putErrorStrLn $ "Found do file: " ++ doFileAbsolute
     let (doFileDir, doFile) = splitFileName doFileAbsolute
     targetFileAbsolute <- makeAbsolute pathToTarget
     let targetRel2Do = makeRelative doFileDir targetFileAbsolute
-    putErrorStrLn $ "targetRel2Do: " ++ targetRel2Do
-    putErrorStrLn $ "doFileDir: " ++ doFileDir
+    --putErrorStrLn $ "targetRel2Do: " ++ targetRel2Do
+    --putErrorStrLn $ "doFileDir: " ++ doFileDir
     performActionInDir (doFileDir) (runDoFile targetRel2Do) doFile
   where
     -- TODO, this is bad too. We need to get the name of the target from the DoFile's directory... need function to create this!
@@ -232,6 +233,7 @@ redoIfChange pathToTarget = do
     if isNothing doFile' then missingDo
     else do
       doFileAbsolute <- makeAbsolute $ fromJust doFile'
+      --putErrorStrLn $ "Found do file: " ++ doFileAbsolute
       let (doFileDir, doFile) = splitFileName doFileAbsolute
       targetFileAbsolute <- makeAbsolute pathToTarget
       let targetRel2Do = makeRelative doFileDir targetFileAbsolute
@@ -240,10 +242,6 @@ redoIfChange pathToTarget = do
     missingDo = do exists <- doesFileExist pathToTarget
                    unless exists $ noDoFileError pathToTarget
 
--- Missing do error function:
-noDoFileError :: FilePath -> IO()
-noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
-                          exitFailure
 -- Run the do script:
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
