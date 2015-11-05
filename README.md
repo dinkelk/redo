@@ -12,7 +12,7 @@ Next, clone this repository and run:
 
     ./do 
 
-in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, and `redo-ifcreate` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
+in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, `redo-ifcreate`, and `redo-always` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 
 ## Usage
 
