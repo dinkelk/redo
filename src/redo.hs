@@ -13,7 +13,7 @@ import System.Console.GetOpt
 import System.Directory (canonicalizePath, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, makeAbsolute)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (pathSeparator, takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
+import System.FilePath (pathSeparator, takeFileName, takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -266,6 +266,8 @@ runDoFile target doFile = do
   -- Write out .do script as dependency:
   storeIfChangeDep target doFile
 
+  --putWarningStrLn $ "cmd: " ++ shellCmd shellArgs doFile target
+
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
@@ -313,11 +315,13 @@ shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs,
                                              show doFile, show target, show $ dropExtensions target, show $ tmp3File target, 
                                              ">", show $ tmpStdoutFile target]
 
--- Temporary file names:
+-- Temporary file names. Note we make these in the current directory, regardless of the target directory,
+-- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
+-- file.
 tmp3File :: FilePath -> FilePath
-tmp3File target = target ++ ".redo1.tmp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmp3File target = (takeFileName target) ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
 tmpStdoutFile :: FilePath -> FilePath
-tmpStdoutFile target = target ++ ".redo2.tmp" -- this temp file captures what gets written to stdout
+tmpStdoutFile target = (takeFileName target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
 removeTempFiles :: FilePath -> IO ()

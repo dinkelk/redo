@@ -88,13 +88,17 @@ hasDependencies target = do
 upToDate :: FilePath -> IO Bool
 upToDate pathToTarget = catch
   (do exists <- doesTargetExist pathToTarget
-      ----putErrorStrLn $ "uptoDate?: " ++ pathToTarget
+      --putErrorStrLn $ "uptoDate?: " ++ pathToTarget
       -- If the target does not exist, then it is obviously not up-to-date, otherwise
       if not exists then return False
       else do
         -- If target has dependencies, then it is a source file, then it can't be built, so it's up-to-date
         -- A target has dependencies if it has a metaDepsDir and it exists.
         -- A target is a source file if we can't find a metaDepsDir or if it the found metaDepsDir doesn't exist
+        doFilePath' <- findDoFile pathToTarget
+        let doFilePath'' = if isNothing doFilePath' then "" else takeDirectory $ fromJust doFilePath'
+        doFilePath <- makeAbsolute doFilePath''
+        --putWarningStrLn $ "doFilePath: " ++ doFilePath
         metaDepsDir' <- depFileDir pathToTarget 
         if isNothing metaDepsDir' then return True
         else do
@@ -117,27 +121,31 @@ upToDate pathToTarget = catch
                 -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
                 --                 then recursively check their dependencies to see if they are up to date
                 let ifChangeDeps = filter (fileHasPrepend ifchange_dependency_prepend) depHashFiles
-                and `liftM` mapM ((depUpToDate metaDepsDir) . unEscapeIfChangePath) ifChangeDeps)
+                and `liftM` mapM ((depUpToDate metaDepsDir doFilePath) . unEscapeIfChangePath) ifChangeDeps)
   (\(_ :: IOException) -> return False)
   where 
-    (targetDir, target) = splitFileName pathToTarget
+    -- TODO IMMEDIATELY: THIS IS WRONG... we should never be splitting paths to get the path to the target.
+    -- We do not really want to targetDir... we want the dir in which the .do file for that target lies!
+    -- really need to encapsolate this complex logic somewhere else :(
+    -- Instead of getting metaDepsDir above.. maybe we should just be finding the .do file directory
+    -- from that we can construct metaDepsDir.. un elegant but correct
     fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
     depCreated :: FilePath -> IO Bool
     depCreated dep = id <$> doesTargetExist dep 
-    depUpToDate :: FilePath -> FilePath -> IO Bool
-    depUpToDate metaDepsDir dep = catch
+    depUpToDate :: FilePath -> FilePath -> FilePath -> IO Bool
+    depUpToDate metaDepsDir doFilePath dep = catch
       (do --putWarningStrLn $ "metaDepsDir: " ++ metaDepsDir
           --putWarningStrLn $ "dep: " ++ dep
           let hashFile = ifChangeDepFile' metaDepsDir dep
           --putWarningStrLn $ "hashFile: " ++ hashFile
           oldHash <- withFile hashFile ReadMode hGetLine
-          newHash <- computeHash $ targetDir </> dep
+          newHash <- computeHash $ doFilePath </> dep
           -- If the dependency is not up-to-date, then return false
           -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
           let depIsUpToDate = oldHash == newHash
           --putWarningStrLn $ "uptodate?: " ++ show depIsUpToDate
           if not depIsUpToDate then return False
-          else upToDate $ targetDir </> dep)
+          else upToDate $ doFilePath </> dep)
       -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
       (\e -> return (ioeGetErrorType e == InappropriateType))
 
