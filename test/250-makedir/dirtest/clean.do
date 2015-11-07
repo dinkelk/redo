@@ -1,1 +1,1 @@
-rm -f *~ .*~ dir1/*~ dir1/.*~ dir1/stinky dir1/log log dir1/go
+rm -f *~ .*~ dir1/*~ dir1/.*~ dir1/stinky dir1/log log dir1/go t1

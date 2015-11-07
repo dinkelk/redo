@@ -1,1 +1,1 @@
-rm -f log *~ .*~
+rm -f log *~ .*~ all
