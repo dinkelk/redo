@@ -3,17 +3,17 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- System imports:
-import Control.Monad (filterM, liftM, unless, when)
+import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.List (intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (isJust, listToMaybe, isNothing, fromJust, fromMaybe)
+import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (canonicalizePath, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, makeAbsolute)
+import System.Directory (renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, makeAbsolute)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (pathSeparator, takeFileName, takeDirectory, isDrive, (</>), splitFileName, makeRelative, dropExtension, dropExtensions, takeExtensions)
+import System.FilePath (takeFileName, (</>), splitFileName, makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -148,10 +148,10 @@ mainDo progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> mapM_ (redo) targets 
+    "redo" -> mapM_ redo targets 
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do mapM_ (redoIfChange) targets
+    "redo-ifchange" -> do mapM_ redoIfChange targets
                           mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
@@ -180,26 +180,6 @@ performActionInDir dir action target = do
   action target
   setCurrentDirectory topDir
 
--- This applies a function to a target in the directory that that target it located in
--- then it returns the current directory to the starting directory:
-performActionInTargetDir :: (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInTargetDir action pathToTarget = performActionInDir dir action target
-  where
-    (dir, target) = splitFileName pathToTarget
-
--- This applies a function to a target in the directory that that target it located in
--- then it returns the current directory to the starting directory:
--- TODO: 1) checkout and debug the new default.do lookup function
---       2) make sure that performActionInDoFileDir works
---       3) Integrate this function with the existing logic for finding do files in redo and redoIfChange
-performActionInDoFileDir :: (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInDoFileDir action pathToTarget = do
-  doFile <- findDoFile pathToTarget 
-  if isJust doFile then performActionInDir (takeDirectory $ fromJust doFile) action target
-  else noDoFileError pathToTarget 
-  where
-    (dir, target) = splitFileName pathToTarget
-
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
 redo pathToTarget = do
@@ -213,10 +193,7 @@ redo pathToTarget = do
     let targetRel2Do = makeRelative doFileDir targetFileAbsolute
     --putErrorStrLn $ "targetRel2Do: " ++ targetRel2Do
     --putErrorStrLn $ "doFileDir: " ++ doFileDir
-    performActionInDir (doFileDir) (runDoFile targetRel2Do) doFile
-  where
-    -- TODO, this is bad too. We need to get the name of the target from the DoFile's directory... need function to create this!
-    (dir, target) = splitFileName pathToTarget
+    performActionInDir doFileDir (runDoFile targetRel2Do) doFile
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 -- TODO: uptoDate needs to be run first, then perform action in target do. these need to be intermingled for epic success
@@ -237,7 +214,7 @@ redoIfChange pathToTarget = do
       let (doFileDir, doFile) = splitFileName doFileAbsolute
       targetFileAbsolute <- makeAbsolute pathToTarget
       let targetRel2Do = makeRelative doFileDir targetFileAbsolute
-      performActionInDir (doFileDir) (runDoFile targetRel2Do) doFile
+      performActionInDir doFileDir (runDoFile targetRel2Do) doFile
   where
     missingDo = do exists <- doesFileExist pathToTarget
                    unless exists $ noDoFileError pathToTarget
@@ -319,9 +296,9 @@ shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
 tmp3File :: FilePath -> FilePath
-tmp3File target = (takeFileName target) ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmp3File target = takeFileName target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
 tmpStdoutFile :: FilePath -> FilePath
-tmpStdoutFile target = (takeFileName target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+tmpStdoutFile target = takeFileName target ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
 removeTempFiles :: FilePath -> IO ()
