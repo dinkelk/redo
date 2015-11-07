@@ -10,10 +10,10 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, makeAbsolute)
+import System.Directory (renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (takeFileName, (</>), splitFileName, makeRelative, dropExtensions)
+import System.FilePath (takeFileName, (</>), makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -168,12 +168,6 @@ performActionInDir dir action target = do
   --case (redoTarget') of 
   --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
   --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
-  -- Hm, this is a bit weird. Need to support recursive upwards looking for default.do files.
-  -- We cannot cd into a directory that does not exist... but we should be able to use default do to run something like
-  -- redo dirThatWillSoonExist/theTarget. Currently, the cd into dirThatWillSoonExist to run .do will fail because it doesn't
-  -- exist.
-  -- In reality, we should first fine the correct .do file to run. Then we should cd to the directory of that .do file, then
-  -- we should run the .do file. TODO!
   catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
     putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
     exitFailure)
@@ -182,44 +176,24 @@ performActionInDir dir action target = do
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo pathToTarget = do
-  doFile' <- findDoFile pathToTarget 
-  if isNothing doFile' then noDoFileError pathToTarget
-  else do
-    doFileAbsolute <- makeAbsolute $ fromJust doFile'
-    --putErrorStrLn $ "Found do file: " ++ doFileAbsolute
-    let (doFileDir, doFile) = splitFileName doFileAbsolute
-    targetFileAbsolute <- makeAbsolute pathToTarget
-    let targetRel2Do = makeRelative doFileDir targetFileAbsolute
-    --putErrorStrLn $ "targetRel2Do: " ++ targetRel2Do
-    --putErrorStrLn $ "doFileDir: " ++ doFileDir
-    performActionInDir doFileDir (runDoFile targetRel2Do) doFile
+redo pathToTarget = maybe (noDoFileError pathToTarget) (runDoFileInDoDir pathToTarget) =<< findDoFile pathToTarget
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
--- TODO: uptoDate needs to be run first, then perform action in target do. these need to be intermingled for epic success
 redoIfChange :: FilePath -> IO ()
 redoIfChange pathToTarget = do 
-  -- hmmm prob need to be in the directory here?
-  -- find do file for target, then go to that directory and see if it is up to date, if not, run the do file from that directory
-  -- wait a minute... what if there is not a do file for the target?... because it is source. OHH NOES! Circular dep, figure out
-  -- how to resolve.
   upToDate' <- upToDate pathToTarget 
   -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ do
-    doFile' <- findDoFile pathToTarget 
-    if isNothing doFile' then missingDo
-    else do
-      doFileAbsolute <- makeAbsolute $ fromJust doFile'
-      --putErrorStrLn $ "Found do file: " ++ doFileAbsolute
-      let (doFileDir, doFile) = splitFileName doFileAbsolute
-      targetFileAbsolute <- makeAbsolute pathToTarget
-      let targetRel2Do = makeRelative doFileDir targetFileAbsolute
-      performActionInDir doFileDir (runDoFile targetRel2Do) doFile
-  where
-    missingDo = do exists <- doesFileExist pathToTarget
-                   unless exists $ noDoFileError pathToTarget
+  unless upToDate' $ maybe missingDo (runDoFileInDoDir pathToTarget)  =<< findDoFile pathToTarget
+  where missingDo = do exists <- doesFileExist pathToTarget
+                       unless exists $ noDoFileError pathToTarget
 
--- Run the do script:
+-- Run a do file in the do file directory on the given target:
+runDoFileInDoDir :: FilePath -> FilePath -> IO ()
+runDoFileInDoDir pathToTarget pathToDoFile = do
+  (doFileDir, doFile, targetRel2Do) <- getTargetRel2Do pathToTarget pathToDoFile 
+  performActionInDir doFileDir (runDoFile targetRel2Do) doFile
+
+-- Run the do script. Note: this must be run in the do file's directory!:
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Print what we are currently "redoing"

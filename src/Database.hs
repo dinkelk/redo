@@ -1,9 +1,10 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, storeAlwaysDep, upToDate, findDoFile, noDoFileError)  where
+module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, 
+                storeAlwaysDep, upToDate, findDoFile, noDoFileError, getTargetRel2Do)  where
 
-import Control.Applicative ((<$>))
+import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard, filterM)
 import Control.Exception (catch, catchJust, SomeException(..), IOException)
 import qualified Data.ByteString.Lazy as BL
@@ -134,16 +135,6 @@ upToDate pathToTarget = catch
       -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
       (\e -> return (ioeGetErrorType e == InappropriateType))
 
--- Returns the target's path relative to the .do file it is run from:
--- TODO: this is probably useful, uncomment and use
---getTargetRel2Do :: FilePath -> FilePath -> IO FilePath
---getTargetRel2Do pathToTarget pathToDoFile = do
---  doFileAbsolute <- makeAbsolute pathToDoFile 
---  targetFileAbsolute <- makeAbsolute pathToTarget
---  let doFileDir = takeDirectory doFileAbsolute
---  return $ makeRelative doFileDir targetFileAbsolute
-
--- Take file path of target and return file path of redo script relative to the current
 -- directory.
 findDoFile :: FilePath -> IO (Maybe FilePath)
 findDoFile pathToTarget = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< doesFileExist targetDo
@@ -277,14 +268,24 @@ depFileDir :: FilePath -> IO (Maybe FilePath)
 depFileDir pathToTarget = maybe (return Nothing) depFileDir' =<< findDoFile pathToTarget 
   where
     depFileDir' :: FilePath -> IO (Maybe FilePath)
-    depFileDir' doFile = do
-      doFileAbsolute <- makeAbsolute doFile
-      targetFileAbsolute <- makeAbsolute pathToTarget
-      return $ Just $ constructDir targetFileAbsolute doFileAbsolute
+    depFileDir' pathToDoFile = do
+      (doFileDirectory, _, targetRel2Do) <- getTargetRel2Do pathToTarget pathToDoFile 
+      return $ Just $ constructDir doFileDirectory targetRel2Do 
     constructDir :: FilePath -> FilePath -> FilePath
-    constructDir targetFileAbsolute doFileAbsolute = doFileDir </> metaDir </> escapeDependencyPath '_' targetRel2Do
-      where (doFileDir, _) = splitFileName doFileAbsolute
-            targetRel2Do = makeRelative doFileDir targetFileAbsolute
+    constructDir doFileDir targetRel2Do = doFileDir </> metaDir </> escapeDependencyPath '_' targetRel2Do
+
+-- Given the path to the target and do file relative to the current directory
+-- return the absolute path to the do directory and the relative paths from the
+-- do directory to the do file, and the do directory to the target file
+getTargetRel2Do :: FilePath -> FilePath -> IO (FilePath, FilePath, FilePath)
+getTargetRel2Do pathToTarget pathToDoFile = do
+  (doDir, doFile) <- splitFileName <$> makeAbsolute pathToDoFile
+  targetRel2Do <- makeRelative doDir <$> makeAbsolute pathToTarget
+  return (doDir, doFile, targetRel2Do)
+
+-- Returns the absolute directory of a file path relative to the current dir:
+getAbsoluteDirectory :: FilePath -> IO FilePath
+getAbsoluteDirectory file = takeDirectory <$> makeAbsolute file 
 
 depFile' :: (FilePath -> FilePath) -> FilePath -> FilePath -> FilePath
 depFile' escapeFunc metaDepsDir dep = metaDepsDir </> escapeFunc dep 
