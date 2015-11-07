@@ -27,7 +27,7 @@ This implementation was inspired by [Chris Forno](https://github.com/jekor/redo)
 3. Target dependency meta-data is stored in a manner that should be immune to conflicts
 4. Improved colors and formatting on redo output to commandline
 5. `-x` and `-v` flags (which are passed onto `sh`) have been added to help users debug .do files
-6. (TODO) Matching default.do files can build targets below their current directory if no other suitable .do file exists.
+6. Default.do files can be used to build targets below their current directory if no other suitable .do files are found.
 7. (TODO) `-jN` flag has been added to support parallel (faster) builds
 
 This implementation has been tested on MacOSX but should work on any Unix-like platform, and with a little exta effort, maybe even on Windows.
