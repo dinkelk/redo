@@ -10,7 +10,7 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (makeAbsolute, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (takeFileName, (</>), makeRelative, dropExtensions)
@@ -18,7 +18,6 @@ import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
 
--- TODO: replace all currentDir </> path to use makeAbsolute
 -- Local imports:
 import Database
 import PrettyPrint
@@ -166,8 +165,8 @@ performActionInDir dir action target = do
   topDir <- getCurrentDirectory
   --redoTarget' <- lookupEnv "REDO_TARGET"
   --case (redoTarget') of 
-  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (pathToTarget)
-  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (pathToTarget)
+  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (target)
+  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (target)
   catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
     putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
     exitFailure)
@@ -176,48 +175,46 @@ performActionInDir dir action target = do
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo pathToTarget = maybe (noDoFileError pathToTarget) (runDoFileInDoDir pathToTarget) =<< findDoFile pathToTarget
+redo target = maybe (noDoFileError target) (runDoFileInDoDir target) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: FilePath -> IO ()
-redoIfChange pathToTarget = do 
-  upToDate' <- upToDate pathToTarget 
+redoIfChange target = do 
+  upToDate' <- upToDate target 
   -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ maybe missingDo (runDoFileInDoDir pathToTarget)  =<< findDoFile pathToTarget
-  where missingDo = do exists <- doesFileExist pathToTarget
-                       unless exists $ noDoFileError pathToTarget
+  unless upToDate' $ maybe missingDo (runDoFileInDoDir target)  =<< findDoFile target
+  where missingDo = do exists <- doesFileExist target
+                       unless exists $ noDoFileError target
 
 -- Run a do file in the do file directory on the given target:
 runDoFileInDoDir :: FilePath -> FilePath -> IO ()
-runDoFileInDoDir pathToTarget pathToDoFile = do
-  (doFileDir, doFile, targetRel2Do) <- getTargetRel2Do pathToTarget pathToDoFile 
-  performActionInDir doFileDir (runDoFile targetRel2Do) doFile
+runDoFileInDoDir target doFile = do
+  (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
+  performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Print what we are currently "redoing"
-  currentDir <- getCurrentDirectory
-  redoInitPath' <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
-  redoDepth' <- lookupEnv "REDO_DEPTH"        -- Depth of recursion for this call to redo
-  shellArgs' <- lookupEnv "REDO_SHELL_ARGS"   -- Shell args passed to initial invokation of redo
-  let redoPath = currentDir
-  let redoInitPath = fromMaybe currentDir redoInitPath'
-  let absoluteTargetPath = currentDir </> target
+  redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
+  shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
+  redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
+  redoPath <- getCurrentDirectory                     -- Current redo path
+  let redoInitPath = fromMaybe redoPath redoInitPath' -- Set the redo init path for the first time it its not set
   let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
   let shellArgs = fromMaybe "" shellArgs'
 
   --putErrorStrLn $ "redo path:            " ++ redoInitPath 
   --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
+  absoluteTargetPath <- makeAbsolute target
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
-  
+  --putWarningStrLn $ "cmd: " ++ shellCmd shellArgs doFile target
+
   -- Create the meta deps dir:
   createMetaDepsDir target
 
   -- Write out .do script as dependency:
   storeIfChangeDep target doFile
-
-  --putWarningStrLn $ "cmd: " ++ shellCmd shellArgs doFile target
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
