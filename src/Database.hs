@@ -2,7 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, 
-                storeAlwaysDep, upToDate, findDoFile, noDoFileError, getTargetRel2Do)  where
+                storeAlwaysDep, upToDate, findDoFile, noDoFileError, getTargetRel2Do,
+                doesTargetExist)  where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard, filterM)
@@ -140,7 +141,7 @@ findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< 
 
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
-noDoFileError target = do putErrorStrLn $ "No .do file found for target '" ++ target ++ "'"
+noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ target ++ "'"
                           exitFailure
 
 -- Functions to escape and unescape dependencies of different types:
@@ -229,7 +230,7 @@ writeDepFile :: FilePath -> FilePath -> IO ()
 writeDepFile file contents = catch
   ( writeFile file contents )
   (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Internal redo error: Encountered problen writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'."
+                               putErrorStrLn $ "Error: Encountered problem writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'."
                                exitFailure)
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate

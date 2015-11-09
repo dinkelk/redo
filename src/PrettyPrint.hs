@@ -1,5 +1,5 @@
 
-module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putRedoStatus) where
+module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putRedoStatus, putUnformattedStrLn) where
 
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
 import System.IO (hPutStrLn, hPutStr, stderr)
@@ -24,6 +24,8 @@ putColorStrLn color string = do setConsoleColor color
                                 setConsoleDefault 
 
 -- Put info, warning, error strings to console:
+putUnformattedStrLn :: String -> IO ()
+putUnformattedStrLn = hPutStrLn stderr
 putInfoStrLn :: String -> IO ()
 putInfoStrLn = putColorStrLn Green 
 putWarningStrLn :: String -> IO ()

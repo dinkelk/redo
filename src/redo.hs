@@ -10,13 +10,14 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (makeAbsolute, renameFile, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (takeFileName, (</>), makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
+import Data.Time (UTCTime(..), Day( ModifiedJulianDay ), secondsToDiffTime)
 
 -- Local imports:
 import Database
@@ -120,7 +121,7 @@ mainTop progName targets =
       -- else, continue to run the action on the target
       isSource <- isSourceFile target
       if isSource then do 
-        putWarningStrLn $ target ++ ": exists and is marked as not buildable. Not redoing."
+        putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as not buildable. Not redoing."
         putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
         exitFailure
       else do
@@ -129,7 +130,7 @@ mainTop progName targets =
    
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
     runOutsideDoError :: String -> IO ()
-    runOutsideDoError program = putWarningStrLn $ "'" ++ program ++ "' can only be invoked inside of a .do file."
+    runOutsideDoError program = putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [FilePath] -> IO()
@@ -203,12 +204,11 @@ runDoFile target doFile = do
   let redoInitPath = fromMaybe redoPath redoInitPath' -- Set the redo init path for the first time it its not set
   let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
   let shellArgs = fromMaybe "" shellArgs'
+  let cmd = shellCmd shellArgs doFile target
 
-  --putErrorStrLn $ "redo path:            " ++ redoInitPath 
-  --putErrorStrLn $ "absolute target path: " ++ absoluteTargetPath 
   absoluteTargetPath <- makeAbsolute target
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
-  --putWarningStrLn $ "cmd: " ++ shellCmd shellArgs doFile target
+  when (not $ null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
   createMetaDepsDir target
@@ -216,6 +216,9 @@ runDoFile target doFile = do
   -- Write out .do script as dependency:
   storeIfChangeDep target doFile
 
+  -- Get the last time the target was modified:
+  targetModTime <- getTargetModificationTime
+   
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
@@ -225,34 +228,61 @@ runDoFile target doFile = do
                       $ insert "REDO_TARGET" target 
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell $ shellCmd shellArgs doFile target) {env = Just newEnv}
+  (_, _, _, processHandle) <- createProcess $ (shell $ cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> catch (renameFile tmp3 target) handler1
-    ExitFailure code -> do putErrorStrLn $ "Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
-                           removeTempFiles target
-                           exitWith $ ExitFailure code
+    ExitSuccess -> moveTempFiles targetModTime
+    ExitFailure code -> redoError code $ "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
   -- Remove the temporary files:
   removeTempFiles target
   where
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
-    -- If renaming the tmp3 fails, let's try renaming tmpStdout:
-    handler1 :: SomeException -> IO ()
-    handler1 _ = catch 
-                   (do size <- fileSize tmpStdout
-                       -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
-                       -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
-                       -- target should be created. This is our way of denoting the file as correctly build! 
-                       -- Usually this target won't exit anyways, but it might exist in the case
-                       -- of a modified .do file that was generating something, and now is not! In this case we remove the 
-                       -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-                       if size > 0 then renameFile tmpStdout target else safeRemoveFile target)
-                   handler2
-    -- Renaming totally failed, lets alert the user:
-    handler2 :: SomeException -> IO ()
-    handler2 _ = putErrorStrLn $ "Redo could not copy results from temporary file '" ++ tmpStdout ++ "'"
+    renameFileOrDir old new = catch(renameFile old new) 
+      (\(_ :: SomeException) -> catch(renameDirectory old new) (\(_ :: SomeException) -> return ()))
+    moveTempFiles prevTimestamp = do 
+      tmp3Exists <- doesTargetExist tmp3
+      stdoutExists <- doesTargetExist tmpStdout
+      if tmp3Exists then do
+        whenTargetNotModified prevTimestamp (do
+          renameFileOrDir tmp3 target
+          when (stdoutExists) (do
+            size <- fileSize tmpStdout
+            when (size > 0) wroteToStdoutError ) )
+      else if stdoutExists then do 
+        whenTargetNotModified prevTimestamp (do
+          size <- fileSize tmpStdout
+          -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
+          -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
+          -- target should be created. This is our way of denoting the file as correctly build! 
+          -- Usually this target won't exit anyways, but it might exist in the case
+          -- of a modified .do file that was generating something, and now is not! In this case we remove the 
+          -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
+          if size > 0 then renameFileOrDir tmpStdout target else safeRemoveFile target )
+      -- Neither temp file was created, so do nothing.
+      else return ()
+    -- TODO: This timestamp is only accurate to seconds. This would work much more consistantly if the time was
+    -- accurate to sub seconds
+    getTargetModificationTime :: IO UTCTime
+    getTargetModificationTime = do
+      targetExists <- doesTargetExist target
+      if targetExists then getModificationTime target else return $ UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0)
+    whenTargetNotModified :: UTCTime -> IO () -> IO ()
+    whenTargetNotModified prevTimestamp action = do
+        timestamp <- getTargetModificationTime
+        --putWarningStrLn $ show timestamp ++ " > " ++ show prevTimestamp
+        if timestamp > prevTimestamp then targetModifiedError else action
+    wroteToStdoutError :: IO ()
+    wroteToStdoutError  = redoError 1 $ "Error: '" ++ doFile ++ "' wrote to stdout and created $3.\n" ++
+                                        "You should write status messages to stderr, not stdout." 
+    targetModifiedError :: IO ()
+    targetModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ target ++ "' directly.\n" ++
+                                        "You should update $3 (the temporary file) or stdout, not $1." 
+    redoError :: Int -> String -> IO ()
+    redoError code message = do putErrorStrLn $ message
+                                removeTempFiles target
+                                exitWith $ ExitFailure code
 
 -- Pass redo script 3 arguments:
 -- $1 - the target name
