@@ -237,11 +237,13 @@ runDoFile target doFile = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> moveTempFiles targetModTime
-    ExitFailure code -> unless (null keepGoing)
-                          (redoError code $ "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code)
+    ExitFailure code -> if null keepGoing
+                        then redoError code $ nonZeroExitStr code
+                        else putErrorStrLn $ nonZeroExitStr code
   -- Remove the temporary files:
   removeTempFiles target
   where
+    nonZeroExitStr code = "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
