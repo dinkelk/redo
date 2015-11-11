@@ -198,18 +198,19 @@ runDoFileInDoDir target doFile = do
 -- Run the do script. Note: this must be run in the do file's directory!:
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
-  -- Print what we are currently "redoing"
-  keepGoing' <- lookupEnv "REDO_KEEP_GOING"         -- Path where redo was initially invoked
+  -- Get some environment variables:
+  keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Path where redo was initially invoked
   redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   redoPath <- getCurrentDirectory                     -- Current redo path
   let redoInitPath = fromMaybe redoPath redoInitPath' -- Set the redo init path for the first time it its not set
-  let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
+  let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
   let keepGoing = fromMaybe "" keepGoing'
   let cmd = shellCmd shellArgs doFile target
 
+  -- Print what we are currently "redoing"
   absoluteTargetPath <- makeAbsolute target
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
   when (not $ null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)

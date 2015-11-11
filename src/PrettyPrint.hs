@@ -37,7 +37,7 @@ putErrorStrLn = putColorStrLn Red
 putRedoStatus :: Int -> FilePath -> IO ()
 putRedoStatus depth file = do setConsoleColorDull Green 
                               setConsoleFaint
-                              hPutStr stderr $ "redo " ++ concat (replicate depth "  " )
+                              hPutStr stderr $ "redo  " ++ concat (replicate depth "  " )
                               setConsoleColor Green
                               setConsoleBold
                               hPutStrLn stderr file
