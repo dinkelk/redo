@@ -1,1 +1,1 @@
-rm -f fail *~ .*~
+rm -f fail *~ .*~ all

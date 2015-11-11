@@ -61,12 +61,11 @@ hasDependencies target = maybe (return False) doesDirectoryExist =<< depFileDir 
 
 -- Returns true if all dependencies are up-to-date, or target is a source file, false otherwise.
 upToDate :: FilePath -> IO Bool
-upToDate target = catch (
+upToDate target =
   -- If the target does not exist, then it is obviously not up-to-date, otherwise check it's dependencies
-  doesTargetExist target >>= bool (return False) 
+  doesTargetExist target >>= bool (do return False) 
     -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
-    (maybe (return True) depsUpToDate =<< findDoFile target)  )
-  (\(_ :: IOException) -> return False)
+    (maybe (do return True) depsUpToDate =<< findDoFile target)
   where 
     -- Does a target have tracked dependencies, or is it a source file? If so, are they up to date?
     depsUpToDate :: FilePath -> IO Bool
@@ -108,8 +107,7 @@ upToDate target = catch (
           newHash <- computeHash $ doFileDir </> dep
           -- If the dependency is not up-to-date, then return false
           -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-          let depIsUpToDate = oldHash == newHash
-          if not depIsUpToDate then return False
+          if oldHash /= newHash then return False
           else upToDate $ doFileDir </> dep)
       -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
       (\e -> return (ioeGetErrorType e == InappropriateType))
@@ -126,7 +124,6 @@ findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< 
     defaultDoPath dir = do
       absPath' <- canonicalizePath dir
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
-      --putWarningStrLn $ "absPath: " ++ absPath
       doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
       if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 
       else return doFile

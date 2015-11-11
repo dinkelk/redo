@@ -1,2 +1,2 @@
-rm -f ifcreate?.log *~ .*~
+rm -f ifcreate?.log *~ .*~ all
 rm -f ifcreate[12]

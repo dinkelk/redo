@@ -24,3 +24,6 @@ cd ..
 #./flush-cache
 redo-ifchange 640-always/always1
 [ "$(wc -l <640-always/always1.log)" -eq 4 ] || exit 51
+
+cd - >> /dev/null
+touch $3

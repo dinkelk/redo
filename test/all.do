@@ -20,7 +20,7 @@ xargs redo
 /bin/ls [2-9][0-9][0-9]*/all.do |
 sed 's/\.do$//' |
 sed 's@200-shell/all@@1' |
-sed 's@350-deps/all@@1' |
+#sed 's@350-deps/all@@1' |
 sed 's@660-stamp/all@@1' |
 sed 's@999-installer/all@@1' |
 xargs redo-ifchange

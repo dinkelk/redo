@@ -20,3 +20,5 @@ for d in 1 2; do
 	redo-ifchange ifcreate$d
 	[ "$(wc -l <ifcreate$d.log)" -eq 3 ] || exit ${d}4
 done
+
+touch $3

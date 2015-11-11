@@ -6,7 +6,13 @@ redo genfile1
 
 # this will cause a rebuild:
 #      genfile1 depends on genfile2 depends on genfile2.do
+#rm -f genfile2.do
+# ^ this won't actually work with haskell redo. If we remove the do file for genfile2, 
+# then redo assumes that genfile2 is now a source file, and cannot be rebuilt. I think 
+# that this is correct behavior. How can we build something without a .do for it?
+# I will run this test instead:
 rm -f genfile2.do
+echo echo hello2 >genfile2.do
 #../flush-cache
 redo-ifchange genfile1
 

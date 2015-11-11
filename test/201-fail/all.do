@@ -12,3 +12,5 @@ touch fail
 # no need to do this with haskell redo
 #../flush-cache
 redo-ifchange fail >&/dev/null || exit 55  # expected to pass
+
+touch $3
