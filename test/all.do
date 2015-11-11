@@ -9,7 +9,6 @@ fi
 # builds 1xx*/all
 /bin/ls 1[0-9][0-9]*/all.do |
 sed 's/\.do$//' |
-sed 's@120-defaults-flat/all@@1' |
 sed 's@121-defaults-nested/all@@1' |
 sed 's@140-shuffle/all@@1' |
 xargs redo
