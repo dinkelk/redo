@@ -56,13 +56,14 @@ isRunFromDoFile = do
 -- 2) list of long option strings (without "--")
 -- 3) argument descriptor
 -- 4) explanation of option for user
-data Flag = Version | Help | DashX | DashV deriving (Eq,Ord,Enum,Show,Bounded) 
+data Flag = Version | Help | DashX | DashV | KeepGoing deriving (Eq,Ord,Enum,Show,Bounded) 
 options :: [OptDescr Flag]
 options =
-  [ Option ['V','?']     ["version"] (NoArg Version)       "show version number"
-  , Option ['h','H']     ["help"]    (NoArg Help)          "show usage"
-  , Option ['x']         ["sh-x"]    (NoArg DashX)         "run .do file using sh with -x option"
-  , Option ['v']         ["sh-v"]    (NoArg DashV)         "run .do file using sh with -v option"
+  [ Option ['V','?']     ["version"]       (NoArg Version)       "show version number"
+  , Option ['h','H']     ["help"]          (NoArg Help)          "show usage"
+  , Option ['x']         ["sh-x"]          (NoArg DashX)         "run .do file using sh with -x option"
+  , Option ['v']         ["sh-v"]          (NoArg DashV)         "run .do file using sh with -v option"
+  , Option ['k']         ["keep-going"]    (NoArg KeepGoing)     "keep building even if some targets fail"
   ]
 
 -- Helper function to get parse through commandline arguments and return options:
@@ -85,6 +86,7 @@ main = do
   -- Show help or version information if asked:
   when (Version `elem` flags) printVersion
   when (Help `elem` flags) (printHelp progName options [])
+  when (KeepGoing `elem` flags) (setEnv "REDO_KEEP_GOING" "TRUE")
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
   let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
@@ -197,6 +199,7 @@ runDoFileInDoDir target doFile = do
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Print what we are currently "redoing"
+  keepGoing' <- lookupEnv "REDO_KEEP_GOING"         -- Path where redo was initially invoked
   redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
@@ -204,6 +207,7 @@ runDoFile target doFile = do
   let redoInitPath = fromMaybe redoPath redoInitPath' -- Set the redo init path for the first time it its not set
   let redoDepth = show $ (if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int)) + 1
   let shellArgs = fromMaybe "" shellArgs'
+  let keepGoing = fromMaybe "" keepGoing'
   let cmd = shellCmd shellArgs doFile target
 
   absoluteTargetPath <- makeAbsolute target
@@ -223,6 +227,7 @@ runDoFile target doFile = do
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
                       $ insert "REDO_PATH" redoPath
+                      $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_TARGET" target 
@@ -232,7 +237,8 @@ runDoFile target doFile = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> moveTempFiles targetModTime
-    ExitFailure code -> redoError code $ "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
+    ExitFailure code -> unless (null keepGoing)
+                          (redoError code $ "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code)
   -- Remove the temporary files:
   removeTempFiles target
   where

@@ -12,7 +12,6 @@ sed 's/\.do$//' |
 sed 's@120-defaults-flat/all@@1' |
 sed 's@121-defaults-nested/all@@1' |
 sed 's@140-shuffle/all@@1' |
-sed 's@141-keep-going/all@@1' |
 xargs redo
 110-compile/hello >&2
 
