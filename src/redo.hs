@@ -10,7 +10,7 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory)
+import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, doesDirectoryExist)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (takeFileName, (</>), makeRelative, dropExtensions)
@@ -279,9 +279,13 @@ runDoFile target doFile = do
       if targetExists then getModificationTime target else return $ UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0)
     whenTargetNotModified :: UTCTime -> IO () -> IO ()
     whenTargetNotModified prevTimestamp action = do
+        -- Allow user to create his a directory directly. This is a special case allowed by python redo, and 
+        -- we will allow it to. It is useful for do files that make a directory and populate it with the same name
+        -- as the do file.
+        dirExist <- doesDirectoryExist target 
         timestamp <- getTargetModificationTime
         --putWarningStrLn $ show timestamp ++ " > " ++ show prevTimestamp
-        if timestamp > prevTimestamp then targetModifiedError else action
+        if not dirExist && timestamp > prevTimestamp then targetModifiedError else action
     wroteToStdoutError :: IO ()
     wroteToStdoutError  = redoError 1 $ "Error: '" ++ doFile ++ "' wrote to stdout and created $3.\n" ++
                                         "You should write status messages to stderr, not stdout." 
