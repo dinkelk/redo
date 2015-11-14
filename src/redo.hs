@@ -13,7 +13,7 @@ import System.Console.GetOpt
 import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, doesDirectoryExist)
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
-import System.FilePath (takeFileName, (</>), makeRelative, dropExtensions)
+import System.FilePath (dropExtension, takeExtensions, takeFileName, (</>), makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -92,6 +92,9 @@ main = do
   let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
                                   if DashV `elem` flags then "v" else ""]
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
+  -- Set the redo path variable to the current directory for the first call:
+  redoInitPath <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
+  when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
   -- Check if redo is being run from inside of a .do file, or if this is the top level run
   -- Run the correct main accordingly
@@ -204,7 +207,7 @@ runDoFile target doFile = do
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   redoPath <- getCurrentDirectory                     -- Current redo path
-  let redoInitPath = fromMaybe redoPath redoInitPath' -- Set the redo init path for the first time it its not set
+  let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
   let keepGoing = fromMaybe "" keepGoing'
@@ -212,6 +215,8 @@ runDoFile target doFile = do
 
   -- Print what we are currently "redoing"
   absoluteTargetPath <- makeAbsolute target
+  --putErrorStrLn $ absoluteTargetPath
+  --putErrorStrLn $ redoInitPath
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
   when (not $ null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
@@ -303,8 +308,24 @@ runDoFile target doFile = do
 -- $3 - the temporary target name
 shellCmd :: String -> FilePath -> FilePath -> String
 shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
-                                             show doFile, show target, show $ dropExtensions target, show $ tmp3File target, 
+                                             show doFile, show target, show $ arg2, show $ tmp3File target, 
                                              ">", show $ tmpStdoutFile target]
+  where 
+    -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
+    -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
+    -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do 
+    -- file or a <targetName>.do file. For example the $2 for "redo file.x.y.z" run from different .do files is shown below:
+    --
+    --    .do file name |         $2  | description 
+    --    file.x.y.z.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing 
+    -- default.x.y.z.do |       file  | we know .x.y.z is the extension, so remove it
+    --   default.y.z.do |     file.x  | we know .y.z is the extension, so remove it 
+    --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
+    --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
+    --
+    arg2 = if (dropExtensions . takeFileName) doFile == "default" then createArg2 target doExtensions else target
+    doExtensions = (takeExtensions . dropExtension) doFile -- remove .do, then grab the rest of the extensions
+    createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
 
 -- Temporary file names. Note we make these in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
