@@ -126,8 +126,8 @@ mainTop progName targets =
       -- else, continue to run the action on the target
       isSource <- isSourceFile target
       if isSource then do 
-        putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as not buildable. Not redoing."
-        putWarningStrLn $ "If you think this incorrect error, remove '" ++ target ++ "' and try again."
+        putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as a source file. Not redoing."
+        putWarningStrLn $ "If you believe '" ++ target ++ "' is buildable, remove it and try again."
         exitFailure
       else do
        action target
