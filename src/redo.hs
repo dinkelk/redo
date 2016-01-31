@@ -18,6 +18,7 @@ import System.IO (withFile, IOMode(..), hFileSize)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
 import Data.Time (UTCTime(..), Day( ModifiedJulianDay ), secondsToDiffTime)
+import System.Random (randomRIO)
 
 -- Local imports:
 import Database
@@ -56,14 +57,16 @@ isRunFromDoFile = do
 -- 2) list of long option strings (without "--")
 -- 3) argument descriptor
 -- 4) explanation of option for user
-data Flag = Version | Help | DashX | DashV | KeepGoing deriving (Eq,Ord,Enum,Show,Bounded) 
+data Flag = Version | Help | DashX | DashV | KeepGoing | Jobs | Shuffle deriving (Eq,Ord,Enum,Show,Bounded) 
 options :: [OptDescr Flag]
 options =
-  [ Option ['V','?']     ["version"]       (NoArg Version)       "show version number"
-  , Option ['h','H']     ["help"]          (NoArg Help)          "show usage"
-  , Option ['x']         ["sh-x"]          (NoArg DashX)         "run .do file using sh with -x option"
-  , Option ['v']         ["sh-v"]          (NoArg DashV)         "run .do file using sh with -v option"
+  [ Option ['j']         ["jobs"]          (NoArg Jobs)          "maximum number of parallel jobs to build at once (not yet supported!)"
+  , Option ['h','H']     ["help"]          (NoArg Help)          "show usage details"
+  , Option ['x']         ["xtrace"]        (NoArg DashX)         "print commands as they are executed with variables expanded"
+  , Option ['v']         ["verbose"]       (NoArg DashV)         "print commands as they are read from .do files"
+  , Option ['V','?']     ["version"]       (NoArg Version)       "print the version number"
   , Option ['k']         ["keep-going"]    (NoArg KeepGoing)     "keep building even if some targets fail"
+  , Option ['s']         ["shuffle"]       (NoArg Shuffle)       "randomize the build order to find dependency bugs"
   ]
 
 -- Helper function to get parse through commandline arguments and return options:
@@ -87,6 +90,7 @@ main = do
   when (Version `elem` flags) printVersion
   when (Help `elem` flags) (printHelp progName options [])
   when (KeepGoing `elem` flags) (setEnv "REDO_KEEP_GOING" "TRUE")
+  when (Shuffle `elem` flags) (setEnv "REDO_SHUFFLE" "TRUE")
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
   let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
@@ -96,11 +100,18 @@ main = do
   redoInitPath <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
-  -- Check if redo is being run from inside of a .do file, or if this is the top level run
-  -- Run the correct main accordingly
-  runFromDoFile <- isRunFromDoFile
-  let mainToRun = if runFromDoFile then mainDo else mainTop
-  mainToRun progName targets
+  -- Run the main:
+  mainToRun' <- mainToRun
+  mainToRun' progName =<< targetsToRun targets
+  where
+    -- Shuffle the targets if required:
+    targetsToRun targets = do shuffleTargets <- lookupEnv "REDO_SHUFFLE"
+                              if isNothing shuffleTargets then return targets 
+                              else shuffle targets
+    -- Check if redo is being run from inside of a .do file, or if this is the top level run
+    -- Run the correct main accordingly
+    mainToRun = do runFromDoFile <- isRunFromDoFile
+                   return $ if runFromDoFile then mainDo else mainTop
 
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [FilePath] -> IO()
@@ -164,6 +175,17 @@ mainDo progName targets = do
     "redo-always" -> performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
     _ -> return ()
 
+-- Randomly shuffle the order of a list:
+-- http://en.literateprograms.org/Fisher-Yates_shuffle_(Haskell)
+shuffle :: [a] -> IO [a]
+shuffle lst = shuffle' lst []
+  where
+    shuffle' [] acc = return acc
+    shuffle' l acc =
+      do k <- randomRIO (0, length l - 1)
+         let (lead, x:xs) = splitAt k l
+         shuffle' (lead ++ xs) (x:acc)
+
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:
 performActionInDir :: FilePath -> (FilePath -> IO ()) -> FilePath -> IO ()
@@ -188,7 +210,7 @@ redoIfChange :: FilePath -> IO ()
 redoIfChange target = do 
   upToDate' <- upToDate target 
   -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ maybe missingDo (runDoFileInDoDir target)  =<< findDoFile target
+  unless upToDate' $ maybe missingDo (runDoFileInDoDir target) =<< findDoFile target
   where missingDo = do exists <- doesFileExist target
                        unless exists $ noDoFileError target
 
@@ -202,7 +224,8 @@ runDoFileInDoDir target doFile = do
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Get some environment variables:
-  keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Path where redo was initially invoked
+  keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
+  shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
   redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
@@ -211,6 +234,7 @@ runDoFile target doFile = do
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
   let keepGoing = fromMaybe "" keepGoing'
+  let shuffleDeps = fromMaybe "" shuffleDeps'
   let cmd = shellCmd shellArgs doFile target
 
   -- Print what we are currently "redoing"
@@ -234,6 +258,7 @@ runDoFile target doFile = do
   let newEnv = toList $ adjust (++ ":.") "PATH" 
                       $ insert "REDO_PATH" redoPath
                       $ insert "REDO_KEEP_GOING" keepGoing
+                      $ insert "REDO_SHUFFLE" shuffleDeps
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_TARGET" target 
