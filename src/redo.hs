@@ -242,7 +242,7 @@ runDoFile target doFile = do
   --putErrorStrLn $ absoluteTargetPath
   --putErrorStrLn $ redoInitPath
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
-  when (not $ null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
+  unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
   createMetaDepsDir target
@@ -264,7 +264,7 @@ runDoFile target doFile = do
                       $ insert "REDO_TARGET" target 
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell $ cmd) {env = Just newEnv}
+  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> moveTempFiles targetModTime
@@ -283,24 +283,30 @@ runDoFile target doFile = do
     moveTempFiles prevTimestamp = do 
       tmp3Exists <- doesTargetExist tmp3
       stdoutExists <- doesTargetExist tmpStdout
-      if tmp3Exists then do
+      if tmp3Exists then
         whenTargetNotModified prevTimestamp (do
           renameFileOrDir tmp3 target
-          when (stdoutExists) (do
+          when stdoutExists (do
             size <- fileSize tmpStdout
             when (size > 0) wroteToStdoutError ) )
-      else if stdoutExists then do 
+      else if stdoutExists then
         whenTargetNotModified prevTimestamp (do
           size <- fileSize tmpStdout
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
           -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
           -- target should be created. This is our way of denoting the file as correctly build! 
-          -- Usually this target won't exit anyways, but it might exist in the case
+          -- Usually this target won't exist anyways, but it might exist in the case
           -- of a modified .do file that was generating something, and now is not! In this case we remove the 
           -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-          if size > 0 then renameFileOrDir tmpStdout target else safeRemoveFile target )
-      -- Neither temp file was created, so do nothing.
-      else return ()
+          if size > 0 then renameFileOrDir tmpStdout target 
+                      -- a stdout file size of 0 was created. This is the default
+                      -- behavior on some systems for ">"-ing a file that generatetes
+                      -- no stdout. In this case, lets not clutter the directory, and
+                      -- instead store a phony target in the meta directory
+                      else do safeRemoveFile target
+                              storePhonyTarget target)
+      -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
+      else storePhonyTarget target
     -- TODO: This timestamp is only accurate to seconds. This would work much more consistantly if the time was
     -- accurate to sub seconds
     getTargetModificationTime :: IO UTCTime
@@ -309,8 +315,8 @@ runDoFile target doFile = do
       if targetExists then getModificationTime target else return $ UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0)
     whenTargetNotModified :: UTCTime -> IO () -> IO ()
     whenTargetNotModified prevTimestamp action = do
-        -- Allow user to create his a directory directly. This is a special case allowed by python redo, and 
-        -- we will allow it to. It is useful for do files that make a directory and populate it with the same name
+        -- Allow user to create a directory directly. This is a special case allowed by python redo, and 
+        -- we will allow it too. It is useful for do files that make a directory and populate it with the same name
         -- as the do file.
         dirExist <- doesDirectoryExist target 
         timestamp <- getTargetModificationTime
@@ -323,7 +329,7 @@ runDoFile target doFile = do
     targetModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ target ++ "' directly.\n" ++
                                         "You should update $3 (the temporary file) or stdout, not $1." 
     redoError :: Int -> String -> IO ()
-    redoError code message = do putErrorStrLn $ message
+    redoError code message = do putErrorStrLn message
                                 removeTempFiles target
                                 exitWith $ ExitFailure code
 
@@ -333,7 +339,7 @@ runDoFile target doFile = do
 -- $3 - the temporary target name
 shellCmd :: String -> FilePath -> FilePath -> String
 shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
-                                             show doFile, show target, show $ arg2, show $ tmp3File target, 
+                                             show doFile, show target, show arg2, show $ tmp3File target, 
                                              ">", show $ tmpStdoutFile target]
   where 
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
