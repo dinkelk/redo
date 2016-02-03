@@ -1,5 +1,5 @@
 
-module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putRedoStatus, putUnformattedStrLn) where
+module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putStatusStrLn, putRedoStatus, putUnformattedStrLn) where
 
 import System.Console.ANSI (hSetSGR, SGR(..), ConsoleLayer(..), Color(..), ColorIntensity(..), ConsoleIntensity(..))
 import System.IO (hPutStrLn, hPutStr, stderr)
@@ -32,6 +32,8 @@ putWarningStrLn :: String -> IO ()
 putWarningStrLn = putColorStrLn Yellow 
 putErrorStrLn :: String -> IO ()
 putErrorStrLn = putColorStrLn Red 
+putStatusStrLn :: String -> IO ()
+putStatusStrLn = putColorStrLn Cyan
 
 -- Special function to format and print the redo status message of what is being built:
 putRedoStatus :: Int -> FilePath -> IO ()
