@@ -11,14 +11,12 @@ for d in 1 2; do
 	[ "$(wc -l <ifcreate$d.log)" -eq 1 ] || exit ${d}1
 	redo-ifchange ifcreate$d
 	[ "$(wc -l <ifcreate$d.log)" -eq 1 ] || exit ${d}2
-	#../flush-cache
+	../flush-cache
 	touch ifcreate$d.dep
 	redo-ifchange ifcreate$d
 	[ "$(wc -l <ifcreate$d.log)" -eq 2 ] || exit ${d}3
-	#../flush-cache
+	../flush-cache
 	rm ifcreate$d.dep
 	redo-ifchange ifcreate$d
 	[ "$(wc -l <ifcreate$d.log)" -eq 3 ] || exit ${d}4
 done
-
-touch $3

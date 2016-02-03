@@ -5,5 +5,3 @@ else
 	redo-ifcreate 220-ifcreate/ifcreate2.dep
 fi
 echo $$ >>220-ifcreate/ifcreate2.log
-cd - >/dev/null
-touch $3

@@ -1,1 +1,1 @@
-rm -f deltest2 *~ .*~ all
+rm -f deltest2 *~ .*~

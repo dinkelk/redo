@@ -4,5 +4,3 @@ DEPS=$(./seq 10 | sed 's/$/.n1/')
 redo-ifchange $DEPS
 . ../skip-if-minimal-do.sh
 . ./check-2.sh
-
-touch $3

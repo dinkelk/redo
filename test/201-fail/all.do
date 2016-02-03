@@ -9,8 +9,5 @@ rm -f fail
 ! redo-ifchange fail >&/dev/null || exit 44  # expected to fail
 
 touch fail
-# no need to do this with haskell redo
-#../flush-cache
+../flush-cache
 redo-ifchange fail >&/dev/null || exit 55  # expected to pass
-
-touch $3

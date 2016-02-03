@@ -11,19 +11,16 @@ cd 640-always
 #redo-ifchange always1
 #[ "$(wc -l <always1.log)" -eq 1 ] || exit 21
 
-#../flush-cache
+../flush-cache
 redo-ifchange always1
 . ../skip-if-minimal-do.sh
 [ "$(wc -l <always1.log)" -eq 2 ] || exit 31
 
-#../flush-cache
+../flush-cache
 redo-ifchange always1
 [ "$(wc -l <always1.log)" -eq 3 ] || exit 41
 
 cd ..
-#./flush-cache
+./flush-cache
 redo-ifchange 640-always/always1
 [ "$(wc -l <640-always/always1.log)" -eq 4 ] || exit 51
-
-cd - >> /dev/null
-touch $3

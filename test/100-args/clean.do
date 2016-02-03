@@ -1,1 +1,1 @@
-rm -f passfail *~ .*~ pleasefail
+rm -f passfail *~ .*~
