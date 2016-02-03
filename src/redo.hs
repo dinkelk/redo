@@ -14,7 +14,7 @@ import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDi
 import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode(..), exitWith, exitSuccess, exitFailure)
 import System.FilePath (dropExtension, takeExtensions, takeFileName, (</>), makeRelative, dropExtensions)
-import System.IO (withFile, IOMode(..), hFileSize)
+import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
 import Data.Time (UTCTime(..), Day( ModifiedJulianDay ), secondsToDiffTime)
@@ -235,7 +235,7 @@ runDoFile target doFile = do
   let shellArgs = fromMaybe "" shellArgs'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
-  let cmd = shellCmd shellArgs doFile target
+  cmd <- shellCmd shellArgs doFile target
 
   -- Print what we are currently "redoing"
   absoluteTargetPath <- makeAbsolute target
@@ -337,11 +337,11 @@ runDoFile target doFile = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
-shellCmd :: String -> FilePath -> FilePath -> String
-shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs, 
-                                             show doFile, show target, show arg2, show $ tmp3File target, 
-                                             ">", show $ tmpStdoutFile target]
-  where 
+shellCmd :: String -> FilePath -> FilePath -> IO String
+shellCmd shellArgs doFile target = do
+  shebang <- readShebang doFile
+  return $ unwords [shebang, show doFile, show target, show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
+  where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
     -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do 
@@ -357,6 +357,13 @@ shellCmd shellArgs doFile target = unwords ["sh -e" ++ shellArgs,
     arg2 = if (dropExtensions . takeFileName) doFile == "default" then createArg2 target doExtensions else target
     doExtensions = (takeExtensions . dropExtension) doFile -- remove .do, then grab the rest of the extensions
     createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
+    -- Read the shebang from a file and use that as the command. This allows us to run redo files that are in a language
+    -- other than shell, ie. python or perl
+    readShebang :: FilePath -> IO String
+    readShebang file = readFirstLine >>= extractShebang
+      where 
+        readFirstLine = catch (withFile file ReadMode hGetLine) (\(_ :: SomeException) -> return "")
+        extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
 -- Temporary file names. Note we make these in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
