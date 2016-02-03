@@ -191,7 +191,7 @@ sanitizeFilePath filePath = normalise $ dir </> file
 
 -- Takes a file path and replaces all </> with @
 escapeDependencyPath :: Char -> FilePath -> FilePath
-escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) ++ concatMap repl path'
+escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) ++ concatMap repl path' ++ ([dependency_prepend] ++ ['.'])
   where path' = sanitizeFilePath path
         repl seperator_replacement = [seperator_replacement] ++ [seperator_replacement_escape]
         repl c   = if isPathSeparator c then [seperator_replacement] else [c]
@@ -200,7 +200,8 @@ escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) +
 unEscapeDependencyPath :: Char -> FilePath -> FilePath
 unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
   where 
-    path = if take 2 name == (['.'] ++ [dependency_prepend]) then unEscape $ drop 2 name else name
+    path = if take 2 name == (['.'] ++ [dependency_prepend]) then unEscape $ (dropEnd 2 . drop 2) name else name
+    dropEnd n list = take (length list - n) list
     unEscape [] = []
     unEscape string = first : unEscape rest
       where
