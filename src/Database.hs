@@ -1,9 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, noDoFileError, getTargetRel2Do,
-                doesTargetExist, storePhonyTarget)  where
+module Database(initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
+                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget)  where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard)
@@ -30,17 +29,15 @@ metaDir = ".redo"
 -- Create meta data folder for storing md5 hashes:
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-createMetaDepsDir :: FilePath -> IO ()
-createMetaDepsDir target = maybe (noDoFileError target) f =<< depFileDir target
+initializeMetaDepsDir :: FilePath -> FilePath -> IO ()
+initializeMetaDepsDir target doFile = f =<< depFileDir' target doFile
   where f metaDepsDir = do
           catchJust (guard . isDoesNotExistError)
                     (removeDirectoryRecursive metaDepsDir)
                     (\_ -> return())
           createDirectoryIfMissing True metaDepsDir 
-
--- Does the target file or directory exist on the filesystem?
-doesTargetExist :: FilePath -> IO Bool
-doesTargetExist target = (||) <$> doesFileExist target <*> doesDirectoryExist target
+          -- Write out .do script as dependency:
+          storeIfChangeDep target doFile
 
 -- Does a phony target file exist in the meta directory for a target?
 doesPhonyTargetExist :: FilePath -> IO Bool
@@ -293,15 +290,6 @@ depFileDir' target doFile = do
   where
     constructDir :: FilePath -> FilePath -> FilePath
     constructDir doFileDir targetRel2Do = doFileDir </> metaDir </> escapeDependencyPath '_' targetRel2Do
-
--- Given the path to the target and do file relative to the current directory
--- return the absolute path to the do directory and the relative paths from the
--- do directory to the do file, and the do directory to the target file
-getTargetRel2Do :: FilePath -> FilePath -> IO (FilePath, FilePath, FilePath)
-getTargetRel2Do target doFile = do
-  (doDir, doFileName) <- splitFileName <$> makeAbsolute doFile
-  targetRel2Do <- makeRelative doDir <$> makeAbsolute target
-  return (doDir, doFileName, targetRel2Do)
 
 -- Returns the absolute directory of a file path relative to the current dir:
 getAbsoluteDirectory :: FilePath -> IO FilePath

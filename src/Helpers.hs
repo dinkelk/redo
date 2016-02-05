@@ -1,15 +1,17 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile) where
+module Helpers(performActionInDir, findDoFile, getTargetRel2Do, doesTargetExist) where
 
+import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
-import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, isPathSeparator, pathSeparator, splitFileName)
-import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, canonicalizePath, getModificationTime, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
-import System.Exit (exitFailure)
-import PrettyPrint
+import Control.Monad (liftM, filterM)
 import Data.Bool (bool)
-import Data.Maybe (isNothing, listToMaybe, fromJust, isJust)
-import Control.Monad (liftM, guard, filterM)
+import Data.Maybe (isNothing, listToMaybe)
+import System.FilePath (makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
+import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, canonicalizePath, getCurrentDirectory, doesDirectoryExist)
+import System.Exit (exitFailure)
+
+import PrettyPrint
 
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:
@@ -48,3 +50,17 @@ findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< 
       where smallfilename = dropExtension filename
             basefilename = dropExtensions filename
             dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
+
+-- Given the path to the target and do file relative to the current directory
+-- return the absolute path to the do directory and the relative paths from the
+-- do directory to the do file, and the do directory to the target file
+getTargetRel2Do :: FilePath -> FilePath -> IO (FilePath, FilePath, FilePath)
+getTargetRel2Do target doFile = do
+  (doDir, doFileName) <- splitFileName <$> makeAbsolute doFile
+  targetRel2Do <- makeRelative doDir <$> makeAbsolute target
+  return (doDir, doFileName, targetRel2Do)
+
+-- Does the target file or directory exist on the filesystem?
+doesTargetExist :: FilePath -> IO Bool
+doesTargetExist target = (||) <$> doesFileExist target <*> doesDirectoryExist target
+

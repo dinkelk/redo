@@ -59,10 +59,7 @@ runDoFile target doFile = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  createMetaDepsDir target
-
-  -- Write out .do script as dependency:
-  storeIfChangeDep target doFile
+  initializeMetaDepsDir target doFile
 
   -- Get the last time the target was modified:
   targetModTime <- getTargetModificationTime
