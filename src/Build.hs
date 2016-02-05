@@ -2,7 +2,7 @@
 -- {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Build(performActionInDir, runDoFileInDoDir) where
+module Build(build) where
 
 -- System imports:
 import Control.Monad (unless, when)
@@ -10,10 +10,10 @@ import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
-import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, setCurrentDirectory, doesDirectoryExist)
+import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
-import System.Exit (ExitCode(..), exitWith, exitFailure)
-import System.FilePath (dropExtension, takeExtensions, takeFileName, (</>), makeRelative, dropExtensions)
+import System.Exit (ExitCode(..), exitWith)
+import System.FilePath (dropExtension, takeExtensions, takeFileName, makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -22,21 +22,11 @@ import Data.Time (UTCTime(..), Day( ModifiedJulianDay ), secondsToDiffTime)
 -- Local imports:
 import Database
 import PrettyPrint
+import Helpers
 
--- This applies a function to a target in the directory provided and then
--- returns the current directory to the starting directory:
-performActionInDir :: FilePath -> (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInDir dir action target = do
-  topDir <- getCurrentDirectory
-  --redoTarget' <- lookupEnv "REDO_TARGET"
-  --case (redoTarget') of 
-  --  (Just redoTarget) -> hPutStrLn stderr $ "... redoing " ++ redoTarget ++ "* -> " ++ (target)
-  --  (Nothing) -> hPutStrLn stderr $ "... redoing " ++ target ++ "  -> " ++ (target)
-  catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-    exitFailure)
-  action target
-  setCurrentDirectory topDir
+-- Builds a target and runs failAction if no the do file cannot be found for that target
+build :: (FilePath -> IO ()) -> FilePath -> IO ()
+build failAction target = maybe (failAction target) (runDoFileInDoDir target) =<< findDoFile target
 
 -- Run a do file in the do file directory on the given target:
 runDoFileInDoDir :: FilePath -> FilePath -> IO ()

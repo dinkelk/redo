@@ -1,8 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfCreateDep, 
-                storeAlwaysDep, upToDate, findDoFile, noDoFileError, getTargetRel2Do,
+module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfChangeDependencies, storeIfCreateDependencies, 
+                storeAlwaysDependency, upToDate, findDoFile, noDoFileError, getTargetRel2Do,
                 doesTargetExist, storePhonyTarget)  where
 
 import Control.Applicative ((<$>),(<*>))
@@ -18,12 +18,48 @@ import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, isPathSeparator, pathSeparator)
 import System.IO (withFile, hGetLine, IOMode(..))
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
+import System.Environment (lookupEnv)
 
 import PrettyPrint
+import Helpers
 
 -- | Directory for storing and fetching data on dependencies of redo targets.
 metaDir :: String 
 metaDir = ".redo"
+
+-- Store dependencies for redo-ifchange:
+storeIfChangeDependencies :: [FilePath] -> IO ()
+storeIfChangeDependencies = storeDependencies storeIfChangeDep
+
+-- Store dependencies for redo-ifcreate:
+storeIfCreateDependencies :: [FilePath] -> IO ()
+storeIfCreateDependencies = storeDependencies storeIfCreateDep
+
+-- Store dependency for redo-always:
+storeAlwaysDependency :: IO ()
+storeAlwaysDependency = do 
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+  performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
+
+-- Store dependencies given a store action and a list of dependencies to store:
+storeDependencies :: (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()  
+storeDependencies storeAction dependencies = do 
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+  dependenciesRel2Parent <- makeRelativeToParent (fromJust parentRedoPath) dependencies 
+  mapM_ (performActionInDir (fromJust parentRedoPath) (storeAction $ fromJust parentRedoTarget) ) dependenciesRel2Parent
+  where
+    makeRelativeToParent :: FilePath -> [FilePath] -> IO ([FilePath])
+    makeRelativeToParent parent targets = do
+      currentDir <- getCurrentDirectory
+      -- All dependencies for the parent target should be stored in a .redo file in the
+      -- parent target .do file invocation location.
+      -- Note: All target listed here are relative to the current directory in the .do script. This could
+      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
+      -- if 'cd' was used in the .do script.
+      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
+      return $ map (makeRelative parent . (currentDir </>)) targets
 
 -- Create meta data folder for storing md5 hashes:
 -- Note: this function also blows out the old directory, which is good news because we don't want old

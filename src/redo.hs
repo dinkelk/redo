@@ -11,7 +11,6 @@ import System.Console.GetOpt
 import System.Directory (doesFileExist, getCurrentDirectory)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure)
-import System.FilePath ((</>), makeRelative)
 import System.Random (randomRIO)
 
 -- Local imports:
@@ -146,16 +145,6 @@ mainTop progName targets =
 -- The main function for redo run within a .do file
 mainDo :: String -> [FilePath] -> IO()
 mainDo progName targets = do
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  currentDir <- getCurrentDirectory
-  -- All dependencies for the parent target should be stored in a .redo file in the
-  -- parent target .do file invocation location.
-  -- Note: All target listed here are relative to the current directory in the .do script. This could
-  -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
-  -- if 'cd' was used in the .do script.
-  -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
-  let targetsRel2Parent = map (makeRelative (fromJust parentRedoPath) . (currentDir </>)) targets
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
@@ -163,11 +152,11 @@ mainDo progName targets = do
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
     "redo-ifchange" -> do mapM_ redoIfChange targets
-                          mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfChangeDep $ fromJust parentRedoTarget) targetsRel2Parent
+                          storeIfChangeDependencies targets
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
-    "redo-ifcreate" -> mapM_ (performActionInDir (fromJust parentRedoPath) $ storeIfCreateDep $ fromJust parentRedoTarget) targetsRel2Parent 
+    "redo-ifcreate" -> storeIfCreateDependencies targets
     -- Store a redo-always dependency for the parent target in the parent target's directory
-    "redo-always" -> performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
+    "redo-always" -> storeAlwaysDependency
     _ -> return ()
 
 -- Randomly shuffle the order of a list:
@@ -183,13 +172,13 @@ shuffle lst = shuffle' lst []
 
 -- Just run the do file for a 'redo' command:
 redo :: FilePath -> IO ()
-redo target = maybe (noDoFileError target) (runDoFileInDoDir target) =<< findDoFile target
+redo target = build noDoFileError target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: FilePath -> IO ()
 redoIfChange target = do 
   upToDate' <- upToDate target 
   -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ maybe missingDo (runDoFileInDoDir target) =<< findDoFile target
-  where missingDo = do exists <- doesFileExist target
-                       unless exists $ noDoFileError target
+  unless upToDate' $ build missingDo target
+  where missingDo t = do exists <- doesFileExist t
+                         unless exists $ noDoFileError t
