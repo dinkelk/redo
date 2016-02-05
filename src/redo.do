@@ -1,7 +1,5 @@
-#!/bin/sh
-
 # Dependencies:
-source="redo.hs PrettyPrint.hs Database.hs"
+source=`ls *.hs`
 redo-ifchange $source
 
 # Compile redo.hs to filename $3 with verbosity set to low 
