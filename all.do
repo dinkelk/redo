@@ -1,4 +1,1 @@
-#!/bin/sh
-
-redo src/install
-touch $3
+redo src/all
