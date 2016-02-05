@@ -2,20 +2,20 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(createMetaDepsDir, isSourceFile, storeIfChangeDep, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, findDoFile, noDoFileError, getTargetRel2Do,
+                storeAlwaysDependency, upToDate, noDoFileError, getTargetRel2Do,
                 doesTargetExist, storePhonyTarget)  where
 
 import Control.Applicative ((<$>),(<*>))
-import Control.Monad (liftM, guard, filterM)
+import Control.Monad (liftM, guard)
 import Control.Exception (catch, catchJust, SomeException(..))
 import qualified Data.ByteString.Lazy as BL
 import Data.Digest.Pure.MD5 (md5)
 import Data.Bool (bool)
-import Data.Maybe (isNothing, listToMaybe, fromJust, isJust)
+import Data.Maybe (isNothing, fromJust, isJust)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (makeAbsolute, canonicalizePath, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
-import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, isPathSeparator, pathSeparator)
+import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator)
 import System.IO (withFile, hGetLine, IOMode(..))
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Environment (lookupEnv)
@@ -26,40 +26,6 @@ import Helpers
 -- | Directory for storing and fetching data on dependencies of redo targets.
 metaDir :: String 
 metaDir = ".redo"
-
--- Store dependencies for redo-ifchange:
-storeIfChangeDependencies :: [FilePath] -> IO ()
-storeIfChangeDependencies = storeDependencies storeIfChangeDep
-
--- Store dependencies for redo-ifcreate:
-storeIfCreateDependencies :: [FilePath] -> IO ()
-storeIfCreateDependencies = storeDependencies storeIfCreateDep
-
--- Store dependency for redo-always:
-storeAlwaysDependency :: IO ()
-storeAlwaysDependency = do 
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
-
--- Store dependencies given a store action and a list of dependencies to store:
-storeDependencies :: (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()  
-storeDependencies storeAction dependencies = do 
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  dependenciesRel2Parent <- makeRelativeToParent (fromJust parentRedoPath) dependencies 
-  mapM_ (performActionInDir (fromJust parentRedoPath) (storeAction $ fromJust parentRedoTarget) ) dependenciesRel2Parent
-  where
-    makeRelativeToParent :: FilePath -> [FilePath] -> IO ([FilePath])
-    makeRelativeToParent parent targets = do
-      currentDir <- getCurrentDirectory
-      -- All dependencies for the parent target should be stored in a .redo file in the
-      -- parent target .do file invocation location.
-      -- Note: All target listed here are relative to the current directory in the .do script. This could
-      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
-      -- if 'cd' was used in the .do script.
-      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
-      return $ map (makeRelative parent . (currentDir </>)) targets
 
 -- Create meta data folder for storing md5 hashes:
 -- Note: this function also blows out the old directory, which is good news because we don't want old
@@ -92,10 +58,10 @@ getBuiltTargetPath target = bool (phonyFile target) (return $ Just target) =<< d
 -- Checks if a target file is a buildable target, or if it is a source file
 isSourceFile :: FilePath -> IO Bool
 isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< doesTargetExist target
-
--- Check's if a target has dependencies stored already
-hasDependencies :: FilePath -> IO Bool
-hasDependencies target = maybe (return False) doesDirectoryExist =<< depFileDir target
+  where
+    -- Check's if a target has dependencies stored already
+    hasDependencies :: FilePath -> IO Bool
+    hasDependencies t = maybe (return False) doesDirectoryExist =<< depFileDir t
   
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
@@ -168,29 +134,6 @@ upToDate target =
       -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
       (\e -> return (ioeGetErrorType e == InappropriateType))
 
--- directory.
-findDoFile :: FilePath -> IO (Maybe FilePath)
-findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< doesFileExist targetDo
-  where
-    (targetDir, targetName) = splitFileName target
-    targetDo = target ++ ".do"
-    -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
-    -- found or "/" is reached.
-    defaultDoPath :: FilePath -> IO (Maybe FilePath)
-    defaultDoPath dir = do
-      absPath' <- canonicalizePath dir
-      let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
-      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
-      if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 
-      else return doFile
-    -- List the possible default.do file candidates relative to the given path:
-    candidates path = map ((path </>) . (++ ".do")) (getDefaultDo $ "default" ++ takeExtensions targetName)
-    -- Form all possible matching default.do files in order of preference:
-    getDefaultDo :: FilePath -> [FilePath]
-    getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
-      where smallfilename = dropExtension filename
-            basefilename = dropExtensions filename
-            dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
 
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
@@ -248,6 +191,40 @@ unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
                            then (seperator_replacement, tail xs)
                            else (pathSeparator, xs)
                       else (x, xs)
+
+-- Store dependencies for redo-ifchange:
+storeIfChangeDependencies :: [FilePath] -> IO ()
+storeIfChangeDependencies = storeDependencies storeIfChangeDep
+
+-- Store dependencies for redo-ifcreate:
+storeIfCreateDependencies :: [FilePath] -> IO ()
+storeIfCreateDependencies = storeDependencies storeIfCreateDep
+
+-- Store dependency for redo-always:
+storeAlwaysDependency :: IO ()
+storeAlwaysDependency = do 
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+  performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
+
+-- Store dependencies given a store action and a list of dependencies to store:
+storeDependencies :: (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()  
+storeDependencies storeAction dependencies = do 
+  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- lookupEnv "REDO_TARGET"
+  dependenciesRel2Parent <- makeRelativeToParent (fromJust parentRedoPath) dependencies 
+  mapM_ (performActionInDir (fromJust parentRedoPath) (storeAction $ fromJust parentRedoTarget) ) dependenciesRel2Parent
+  where
+    makeRelativeToParent :: FilePath -> [FilePath] -> IO ([FilePath])
+    makeRelativeToParent parent targets = do
+      currentDir <- getCurrentDirectory
+      -- All dependencies for the parent target should be stored in a .redo file in the
+      -- parent target .do file invocation location.
+      -- Note: All target listed here are relative to the current directory in the .do script. This could
+      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
+      -- if 'cd' was used in the .do script.
+      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
+      return $ map (makeRelative parent . (currentDir </>)) targets
 
 -- If the dependency exists then store:
 storeIfChangeDep :: FilePath -> FilePath -> IO ()
