@@ -17,3 +17,5 @@ cabal.sandbox.config
 .DS_Store
 .redo
 .do_built*
+*.swp
+bin
