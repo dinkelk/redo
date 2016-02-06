@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget)  where
+                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, lockFileName)  where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard)
@@ -38,6 +38,11 @@ initializeMetaDepsDir target doFile = f =<< depFileDir' target doFile
           createDirectoryIfMissing True metaDepsDir 
           -- Write out .do script as dependency:
           storeIfChangeDep target doFile
+
+lockFileName :: FilePath -> IO (Maybe FilePath)
+lockFileName target = maybe (return Nothing) formLockFile =<< depFileDir target
+  where
+    formLockFile depFilePath = return $ Just $ depFilePath ++ "lck."
 
 -- Does a phony target file exist in the meta directory for a target?
 doesPhonyTargetExist :: FilePath -> IO Bool
