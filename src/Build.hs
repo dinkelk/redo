@@ -24,7 +24,7 @@ import Database
 import PrettyPrint
 import Helpers
 
--- Builds a target and runs failAction if no the do file cannot be found for that target
+-- Builds a target and runs failAction if the do file cannot be found for that target:
 build :: (FilePath -> IO ()) -> FilePath -> IO ()
 build failAction target = maybe (failAction target) (runDoFileInDoDir target) =<< findDoFile target
 

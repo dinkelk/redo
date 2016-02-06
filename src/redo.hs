@@ -8,7 +8,7 @@ import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (doesFileExist, getCurrentDirectory)
+import System.Directory (doesFileExist, getCurrentDirectory, createDirectoryIfMissing)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure)
 import System.Random (randomRIO)
@@ -95,6 +95,10 @@ main = do
   redoInitPath <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
+  -- Create a the meta directory if it doesn't exist yet:
+  metaRootDir <- metaDir
+  createDirectoryIfMissing True metaRootDir
+
   -- Run the main:
   mainToRun' <- mainToRun
   mainToRun' progName =<< targetsToRun targets
@@ -115,10 +119,10 @@ mainTop progName targets = do
   case progName of 
     -- Run redo only on buildable files from the target's directory
     "redo" -> do checkTargets targets'
-                 lockFileMap (runActionIfBuildable redo) targets'
+                 lockFileMap redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
     "redo-ifchange" -> do checkTargets targets
-                          lockFileMap (runActionIfBuildable redoIfChange) targets
+                          lockFileMap redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -140,20 +144,6 @@ mainTop progName targets = do
             exitFailure
           else return ()
 
-    -- This applies a function to a target if the target is not marked as a source file:
-    runActionIfBuildable :: (FilePath -> IO ()) -> FilePath -> IO ()
-    runActionIfBuildable action target = do 
-      -- If the user is trying to build a source file, then exit with an error
-      -- else, continue to run the action on the target
-      isSource <- isSourceFile target
-      if isSource then do 
-        putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as a source file. Not redoing."
-        putWarningStrLn $ "If you believe '" ++ target ++ "' is buildable, remove it and try again."
-        exitFailure
-      else do
-       action target
-       return ()
-   
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
     runOutsideDoError :: String -> IO ()
     runOutsideDoError program = putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
@@ -207,12 +197,6 @@ redoIfChange target = do
 -- This function allows us to build all the targets that don't have any 
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention.
-
--- ISSUE with this... lockFileName is the problem. We can only get it if
--- target is valid... and if target isn't valid, we skip a lot of the checks
--- that are built in downstream... We really need to lock the file after we know
--- that the file is valid, has a .do, isn't source, etc. Need to figure out how
--- to achieve that.
 lockFileMap :: (FilePath -> IO ()) -> [FilePath] -> IO ()
 lockFileMap func files = do
   remainingFiles <- mapM tryFunc files -- Try to lock file and build it, accumulate list of unbuilt files
@@ -220,9 +204,8 @@ lockFileMap func files = do
   where
     tryFunc :: FilePath -> IO ((FilePath, FilePath))
     tryFunc file = do lckFileName <- lockFileName file 
-                      case lckFileName of Nothing -> return ("", "")
-                                          Just _ -> maybe (return (file, fromJust lckFileName)) (runFunc file) 
-                                            =<< tryLockFile (fromJust lckFileName) Exclusive
+                      maybe (return (file, lckFileName)) (runFunc file) 
+                        =<< tryLockFile lckFileName Exclusive
     runFunc file lock = do func file
                            unlockFile lock
                            return ("", "")
