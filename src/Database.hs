@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, lockFileName)  where
+                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile)  where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard)
@@ -18,7 +18,6 @@ import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (getAppUserDataDirectory, makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator)
-import System.IO (withFile, hGetLine, IOMode(..))
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Environment (lookupEnv)
 
@@ -34,7 +33,12 @@ depFileDir :: FilePath -> IO (FilePath)
 depFileDir target = do
   metaRoot <- metaDir 
   absPath <- makeAbsolute target
-  return $ metaRoot </> (hex $ BS.unpack $ hash $ BS.pack absPath)
+  return $ metaRoot </> (pathify $ hashString absPath)
+  where 
+    hashString string = hex $ BS.unpack $ hash $ BS.pack string
+    pathify "" = ""
+    pathify string = x </> pathify xs
+      where (x,xs) = splitAt 2 string
 
 -- Create meta data folder for storing md5 hashes:
 -- Note: this function also blows out the old directory, which is good news because we don't want old
@@ -50,9 +54,10 @@ initializeMetaDepsDir target doFile = f =<< depFileDir target
           storeIfChangeDep target doFile
           
 -- Return the lock file name for a target:
-lockFileName :: FilePath -> IO (FilePath)
-lockFileName target = do dir <- depFileDir target
-                         return $ dir ++ ".lck"
+createLockFile :: FilePath -> IO (FilePath)
+createLockFile target = do dir <- depFileDir target
+                           createDirectoryIfMissing True dir
+                           return $ dir </> ".lck.lck."
 
 -- Does a phony target file exist in the meta directory for a target?
 doesPhonyTargetExist :: FilePath -> IO Bool
@@ -132,7 +137,8 @@ upToDate target =
     ifChangeDepsUpToDate :: FilePath -> FilePath -> IO Bool
     ifChangeDepsUpToDate doFileDir dep = catch
       (do hashFile <- ifChangeDepFile target dep
-          oldHash <- withFile hashFile ReadMode hGetLine
+          --oldHash <- withFile hashFile ReadMode hGetLine
+          oldHash <- BS.readFile hashFile
           -- Get the dependency to hash (phony or real). It it exists, calculate and 
           -- store the hash. Otherwise, we know we are not up to date because the dep 
           -- is missing.
@@ -253,27 +259,27 @@ storePhonyTarget target = createEmptyDepFile =<< phonyFile target
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
 -- TODO: implement timestamps, also make hash stored as binary
-computeHash :: FilePath -> IO String
+computeHash :: FilePath -> IO BS.ByteString
 computeHash file = do 
   isDir <- doesDirectoryExist file
   if isDir then do
     timestamp <- getModificationTime file
-    return (show timestamp)
-  else (show . hash) `liftM` BS.readFile file
+    return $ BS.pack $ show timestamp
+  else hash `liftM` BS.readFile file
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
-writeDepFile :: FilePath -> FilePath -> IO ()
+writeDepFile :: FilePath -> BS.ByteString -> IO ()
 writeDepFile file contents = catch
-  ( writeFile file contents )
+  ( BS.writeFile file contents )
   (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error: Encountered problem writing '" ++ contents ++ "' to '" ++ cd </> file ++ "'."
+                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack contents ++ "' to '" ++ cd </> file ++ "'."
                                exitFailure)
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate
 -- note may need to make specific one for redoifcreate and redoalways
 createEmptyDepFile :: FilePath -> IO ()
-createEmptyDepFile file = writeDepFile file "." 
+createEmptyDepFile file = writeDepFile file (BS.singleton '.')
 
 -- Returns the absolute directory of a file path relative to the current dir:
 getAbsoluteDirectory :: FilePath -> IO FilePath

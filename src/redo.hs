@@ -203,7 +203,7 @@ lockFileMap func files = do
   mapM_ waitFunc remainingFiles        -- Wait to acquire the lock, and build the remaining unbuilt files
   where
     tryFunc :: FilePath -> IO ((FilePath, FilePath))
-    tryFunc file = do lckFileName <- lockFileName file 
+    tryFunc file = do lckFileName <- createLockFile file 
                       maybe (return (file, lckFileName)) (runFunc file) 
                         =<< tryLockFile lckFileName Exclusive
     runFunc file lock = do func file
