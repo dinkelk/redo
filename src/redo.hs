@@ -8,11 +8,10 @@ import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (doesFileExist, getCurrentDirectory, createDirectoryIfMissing)
+import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure)
 import System.Random (randomRIO)
-import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
 
 -- Local imports:
 import Database
@@ -119,10 +118,10 @@ mainTop progName targets = do
   case progName of 
     -- Run redo only on buildable files from the target's directory
     "redo" -> do checkTargets targets'
-                 lockFileMap redo targets'
+                 redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
     "redo-ifchange" -> do checkTargets targets
-                          lockFileMap redoIfChange targets
+                          redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -154,17 +153,17 @@ mainDo progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> lockFileMap redo targets 
+    "redo" -> redo targets
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do lockFileMap redoIfChange targets
+    "redo-ifchange" -> do redoIfChange targets
                           storeIfChangeDependencies targets
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> storeIfCreateDependencies targets
     -- Store a redo-always dependency for the parent target in the parent target's directory
     "redo-always" -> storeAlwaysDependency
     _ -> return ()
-
+    
 -- Randomly shuffle the order of a list:
 -- http://en.literateprograms.org/Fisher-Yates_shuffle_(Haskell)
 shuffle :: [a] -> IO [a]
@@ -175,42 +174,3 @@ shuffle lst = shuffle' lst []
       do k <- randomRIO (0, length l - 1)
          let (lead, x:xs) = splitAt k l
          shuffle' (lead ++ xs) (x:acc)
-
--- Just run the do file for a 'redo' command:
-redo :: FilePath -> IO ()
-redo target = build noDoFileError target
-
--- Only run the do file if the target is not up to date for 'redo-ifchange' command:
-redoIfChange :: FilePath -> IO ()
-redoIfChange target = do 
-  upToDate' <- upToDate target 
-  -- Try to run redo if out of date, if it fails, print an error message:
-  unless upToDate' $ build missingDo target
-  where missingDo t = do exists <- doesFileExist t
-                         unless exists $ noDoFileError t
-
--- Lock a file and run a function that takes that file as input.
--- If the file is already locked, skip running the function on that
--- file initially, and continue to trying to run the function on the next
--- file in the list. In a second pass, wait as long as it takes to lock 
--- on the files that were initially skipped before running the function.
--- This function allows us to build all the targets that don't have any 
--- lock contention first, buying us a little time before we wait to build
--- the files under lock contention.
-lockFileMap :: (FilePath -> IO ()) -> [FilePath] -> IO ()
-lockFileMap func files = do
-  remainingFiles <- mapM tryFunc files -- Try to lock file and build it, accumulate list of unbuilt files
-  mapM_ waitFunc remainingFiles        -- Wait to acquire the lock, and build the remaining unbuilt files
-  where
-    tryFunc :: FilePath -> IO ((FilePath, FilePath))
-    tryFunc file = do lckFileName <- createLockFile file 
-                      maybe (return (file, lckFileName)) (runFunc file) 
-                        =<< tryLockFile lckFileName Exclusive
-    runFunc file lock = do func file
-                           unlockFile lock
-                           return ("", "")
-    waitFunc :: (FilePath, FilePath) -> IO ()
-    waitFunc ("", "") = return ()
-    waitFunc (file, lckFileName) = do lock <- lockFile lckFileName Exclusive 
-                                      func file
-                                      unlockFile lock

@@ -2,7 +2,7 @@
 -- {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Build(build) where
+module Build(redo, redoIfChange) where
 
 -- System imports:
 import Control.Monad (unless, when)
@@ -13,6 +13,7 @@ import Data.Maybe (isNothing, fromJust, fromMaybe)
 import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
+import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
 import System.FilePath (dropExtension, takeExtensions, takeFileName, makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
@@ -24,15 +25,61 @@ import Database
 import PrettyPrint
 import Helpers
 
--- Builds a target and runs failAction if the do file cannot be found for that target:
-build :: (FilePath -> IO ()) -> FilePath -> IO ()
-build failAction target = maybe (failAction target) (runDoFileInDoDir target) =<< findDoFile target
+-- Just run the do file for a 'redo' command:
+redo :: [FilePath] -> IO ()
+redo targets = buildTargets noDoFileError build targets 
+
+-- Only run the do file if the target is not up to date for 'redo-ifchange' command:
+redoIfChange :: [FilePath] -> IO ()
+redoIfChange targets = buildTargets missingDo redoIfChange' targets
+  where 
+    redoIfChange' target doFile = do 
+      upToDate' <- upToDate target doFile
+      -- Try to run redo if out of date, if it fails, print an error message:
+      unless upToDate' $ build target doFile
+    missingDo target = do exists <- doesTargetExist target
+                          unless exists $ noDoFileError target
+
+-- Lock a file and run a function that takes that file as input.
+-- If the file is already locked, skip running the function on that
+-- file initially, and continue to trying to run the function on the next
+-- file in the list. In a second pass, wait as long as it takes to lock 
+-- on the files that were initially skipped before running the function.
+-- This function allows us to build all the targets that don't have any 
+-- lock contention first, buying us a little time before we wait to build
+-- the files under lock contention
+buildTargets :: (FilePath -> IO ())-> (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()
+buildTargets failAction buildFunc targets = do
+  -- Try to lock file and build it, accumulate list of unbuilt files
+  remainingTargets <- mapM tryBuild targets 
+  -- Wait to acquire the lock, and build the remaining unbuilt files
+  mapM_ waitBuild remainingTargets          
+  where
+    -- Try to build the target if the do file can be found and there is no lock contention:
+    tryBuild target = maybe (failAction target >> return ("", "", "")) (tryBuild' target) =<< findDoFile target
+    tryBuild' target doFile = do lckFileName <- createLockFile target 
+                                 maybe (return (target, doFile, lckFileName)) (runBuild target doFile) 
+                                   =<< tryLockFile lckFileName Exclusive
+    runBuild target doFile lock = do buildFunc target doFile
+                                     unlockFile lock
+                                     return ("", "", "")
+    -- Wait to build the target if the do file is given, regardless of lock contention:
+    waitBuild :: (FilePath, FilePath, FilePath) -> IO ()
+    waitBuild ("", "", "") = return ()
+    waitBuild (target, doFile, lckFileName) = do lock <- lockFile lckFileName Exclusive 
+                                                 buildFunc target doFile
+                                                 unlockFile lock
 
 -- Run a do file in the do file directory on the given target:
-runDoFileInDoDir :: FilePath -> FilePath -> IO ()
-runDoFileInDoDir target doFile = do
+build :: FilePath -> FilePath -> IO ()
+build target doFile = do
   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
+
+-- runDoFileInDoDir :: FilePath -> FilePath -> IO ()
+-- runDoFileInDoDir target doFile = do
+--   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
+--   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 runDoFile :: FilePath -> FilePath -> IO () 

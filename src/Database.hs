@@ -94,16 +94,14 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 #define phony_target_prepend '#'
 
 -- Returns true if all dependencies are up-to-date, or target is a source file, false otherwise.
-upToDate :: FilePath -> IO Bool
-upToDate target =
+upToDate :: FilePath -> FilePath -> IO Bool
+upToDate target doFile =
   -- If the target has not been built, then it is obviously not up-to-date, otherwise check it's dependencies
-  hasTargetBeenBuilt target >>= bool (return False) 
-    -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
-    (maybe (return True) depsUpToDate =<< findDoFile target)
+  hasTargetBeenBuilt target >>= bool (return False) (depsUpToDate)
   where 
     -- Does a target have tracked dependencies, or is it a source file? If so, are they up to date?
-    depsUpToDate :: FilePath -> IO Bool
-    depsUpToDate doFile = do
+    depsUpToDate :: IO Bool
+    depsUpToDate = do
       -- If target has no dependencies, then it is a source file, and can't be built, so it's up-to-date
       -- otherwise check the target's dependencies to see if they are up to date.
       -- Note: A target has dependencies if it has a metaDepsDir.
@@ -137,7 +135,6 @@ upToDate target =
     ifChangeDepsUpToDate :: FilePath -> FilePath -> IO Bool
     ifChangeDepsUpToDate doFileDir dep = catch
       (do hashFile <- ifChangeDepFile target dep
-          --oldHash <- withFile hashFile ReadMode hGetLine
           oldHash <- BS.readFile hashFile
           -- Get the dependency to hash (phony or real). It it exists, calculate and 
           -- store the hash. Otherwise, we know we are not up to date because the dep 
@@ -147,7 +144,9 @@ upToDate target =
           -- If the dependency is not up-to-date, then return false
           -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
           if oldHash /= newHash then return False
-          else upToDate $ doFileDir </> dep)
+          -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
+          -- Otherwise, we need to check if the dep itself is up to date, so recurse.
+          else maybe (return True) (upToDate $ doFileDir </> dep) =<< findDoFile dep)
       -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
       (\e -> return (ioeGetErrorType e == InappropriateType))
 
