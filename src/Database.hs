@@ -68,9 +68,10 @@ hasTargetBeenBuilt :: FilePath -> IO Bool
 hasTargetBeenBuilt target = (||) <$> doesTargetExist target <*> doesPhonyTargetExist target
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
--- phony target.
-getBuiltTargetPath :: FilePath -> IO(FilePath)
-getBuiltTargetPath target = bool (phonyFile target) (return target) =<< doesTargetExist target
+-- phony target if it exists, else return Nothing
+getBuiltTargetPath :: FilePath -> IO(Maybe FilePath)
+getBuiltTargetPath target = returnTargetIfExists (returnTargetIfExists (return Nothing) =<< phonyFile target) target
+  where returnTargetIfExists failFunc file = bool (failFunc) (return $ Just file) =<< doesTargetExist file
 
 -- Checks if a target file is a buildable target, or if it is a source file
 isSourceFile :: FilePath -> IO Bool
@@ -131,24 +132,30 @@ upToDate target doFile =
     -- Has a dependency been created
     depCreated :: FilePath -> IO Bool
     depCreated dep = id <$> doesTargetExist dep 
-    -- Are a target's redo-ifchange dependencies up to date? This function provides recursion:
+    -- Are a target's redo-ifchange dependencies up to date?
     ifChangeDepsUpToDate :: FilePath -> FilePath -> IO Bool
-    ifChangeDepsUpToDate doFileDir dep = catch
-      (do hashFile <- ifChangeDepFile target dep
-          oldHash <- BS.readFile hashFile
-          -- Get the dependency to hash (phony or real). It it exists, calculate and 
-          -- store the hash. Otherwise, we know we are not up to date because the dep 
-          -- is missing.
-          depToHash <- getBuiltTargetPath $ doFileDir </> dep
-          newHash <- computeHash depToHash
-          -- If the dependency is not up-to-date, then return false
-          -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-          if oldHash /= newHash then return False
-          -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
-          -- Otherwise, we need to check if the dep itself is up to date, so recurse.
-          else maybe (return True) (upToDate $ doFileDir </> dep) =<< findDoFile dep)
-      -- Ignore "." and ".." directories, and return true, return false if file dep doesn't exist
-      (\e -> return (ioeGetErrorType e == InappropriateType))
+    ifChangeDepsUpToDate doFileDir dep = do
+      hashFile <- ifChangeDepFile target dep
+      -- Get the dependency to hash (phony or real). It it exists, calculate and 
+      -- compare the hash. Otherwise, we know we are not up to date because the dep 
+      -- is missing.
+      maybe (return False) (compareHash hashFile) =<< getBuiltTargetPath depFullPath
+      where
+        depFullPath = doFileDir </> dep
+        -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
+        compareHash :: FilePath -> FilePath -> IO Bool
+        compareHash hashFile depToHash = catch 
+          (do oldHash <- BS.readFile hashFile
+              newHash <- computeHash depToHash
+              -- If the dependency is not up-to-date, then return false
+              -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
+              if oldHash /= newHash then return False
+              -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
+              -- Otherwise, we need to check if the dep itself is up to date, so recurse.
+              else maybe (return True) (upToDate depFullPath) =<< findDoFile dep)
+          -- Ignore "." and ".." directories by returning true, return false if file dep doesn't exist
+          (\e -> return (ioeGetErrorType e == InappropriateType))
+
 
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
@@ -238,13 +245,12 @@ storeDependencies storeAction dependencies = do
       -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
       return $ map (makeRelative parent . (currentDir </>)) targets
 
--- If the dependency exists then store:
+-- If the dependency exists then store its hash:
 storeIfChangeDep :: FilePath -> FilePath -> IO ()
-storeIfChangeDep target dep = do
-  depToHash <- getBuiltTargetPath dep
-  theDepFile <- ifChangeDepFile target dep
-  h <- computeHash $ depToHash
-  writeDepFile (theDepFile) h
+storeIfChangeDep target dep = maybe (return ()) storeHash =<< getBuiltTargetPath dep
+  where storeHash depToHash = do theDepFile <- ifChangeDepFile target dep
+                                 h <- computeHash $ depToHash
+                                 writeDepFile (theDepFile) h
 
 storeIfCreateDep :: FilePath -> FilePath -> IO ()
 storeIfCreateDep target dep = createEmptyDepFile =<< ifCreateDepFile target dep
