@@ -28,6 +28,7 @@ performActionInDir dir action target = do
   action target
   setCurrentDirectory topDir
 
+-- Todo: hash do files for each target on build, and use the hashes on ifchange
 findDoFile :: FilePath -> IO (Maybe FilePath)
 findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< doesFileExist targetDo
   where
@@ -43,7 +44,8 @@ findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< 
       if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 
       else return doFile
     -- List the possible default.do file candidates relative to the given path:
-    candidates path = map ((path </>) . (++ ".do")) (getDefaultDo $ "default" ++ takeExtensions targetName)
+    candidates path = map (path </>) defaults
+    defaults = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions targetName)
     -- Form all possible matching default.do files in order of preference:
     getDefaultDo :: FilePath -> [FilePath]
     getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
