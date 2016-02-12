@@ -17,7 +17,7 @@ import Data.Maybe (fromJust)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (getAppUserDataDirectory, makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
-import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator)
+import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Environment (lookupEnv)
 
@@ -40,7 +40,8 @@ depFileDir target = do
     pathify string = x </> pathify xs
       where (x,xs) = splitAt 2 string
 
--- Create meta data folder for storing md5 hashes:
+-- Create meta data folder for storing hashes and/or timestamps
+-- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
 initializeMetaDepsDir :: FilePath -> FilePath -> IO ()
@@ -52,7 +53,23 @@ initializeMetaDepsDir target doFile = f =<< depFileDir target
           createDirectoryIfMissing True metaDepsDir 
           -- Write out .do script as dependency:
           storeIfChangeDep target doFile
+          -- Cache the do file:
+          cacheDoFile target doFile
           
+-- Cache the do file path so we know which do was used to build a target the last time it was built
+cacheDoFile :: FilePath -> FilePath -> IO ()
+cacheDoFile target doFile = do dir <- depFileDir target
+                               absoluteDoFile <- makeAbsolute doFile
+                               writeFile (dir </> ".do.do.") absoluteDoFile
+
+-- Retrieve the cached do file path
+getCachedDoFile :: FilePath -> IO (Maybe FilePath)
+getCachedDoFile target = do dir <- depFileDir target
+                            let doFileCache = dir </> ".do.do."
+                            bool (return Nothing) (readCache doFileCache) =<< doesFileExist doFileCache
+  where readCache doFileCache = do doFile <- readFile doFileCache
+                                   return $ Just doFile
+
 -- Return the lock file name for a target:
 createLockFile :: FilePath -> IO (FilePath)
 createLockFile target = do dir <- depFileDir target
@@ -98,8 +115,20 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 upToDate :: FilePath -> FilePath -> IO Bool
 upToDate target doFile =
   -- If the target has not been built, then it is obviously not up-to-date, otherwise check it's dependencies
-  hasTargetBeenBuilt target >>= bool (return False) (depsUpToDate)
+  --hasTargetBeenBuilt target >>= bool (return False) (newDoFileFound)
+  hasTargetBeenBuilt target >>= bool (return False) (newDoFileFound)
   where 
+    -- Is the do file we found to build this file different than the do file it was built with last time?
+    -- If so, we know that the file needs to be rebuilt with the new do file, so return False.
+    newDoFileFound :: IO Bool
+    newDoFileFound = do
+      absDoFile <- makeAbsolute doFile
+      -- We shouldn't expect a do file to build another do file by default, so skip this check
+      -- otherwise we end up with uncorrect behavior
+      if (takeExtension target) == ".do" then depsUpToDate
+      -- See if a new do file was found for this target compared to what built it last time
+      else maybe (return False) (checkDepsIfPathsEqual absDoFile) =<< getCachedDoFile target
+      where checkDepsIfPathsEqual path1 path2 = if path1 /= path2 then return False else depsUpToDate
     -- Does a target have tracked dependencies, or is it a source file? If so, are they up to date?
     depsUpToDate :: IO Bool
     depsUpToDate = do
@@ -109,6 +138,7 @@ upToDate target doFile =
       -- Note: A target is a source file if the metaDepsDir doesn't exist
       metaDepsDir <- depFileDir target
       doesDirectoryExist metaDepsDir >>= bool (return True) (do
+        -- Grab the hashed dep files from the dep dir and see if those are up to date
         doFileDir <- getAbsoluteDirectory doFile
         depsUpToDate' doFileDir =<< getDirectoryContents metaDepsDir) 
     -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date?
@@ -155,7 +185,6 @@ upToDate target doFile =
               else maybe (return True) (upToDate depFullPath) =<< findDoFile dep)
           -- Ignore "." and ".." directories by returning true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
-
 
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
