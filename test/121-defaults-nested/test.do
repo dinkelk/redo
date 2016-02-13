@@ -19,16 +19,14 @@ check file.x.y.z "root file.x.y.z ."
 check file.z "root file.z ."
 check file "root file ."
 
-# Note... changed this test to preserve "..". This helps when symlinks are in the path
-check a/file.x.y.z "default.x.y.z b/../file .x.y.z"
-check a/file.y.z "default.z b/../file.y .z"
-check a/file.z "default.z b/../file .z"
+check a/file.x.y.z "default.x.y.z file .x.y.z"
+check a/file.y.z "default.z file.y .z"
+check a/file.z "default.z file .z"
 check a/file "root a/b/../file ."
 
 check a/b/file.x.y.z "file file.x.y.z"
 check a/b/file.y.z "default.y.z file .y.z"
 check a/b/file.z "default.z b/file .z"
-#check a/b/file "root a/b/file a/b"
 check a/b/file "root a/b/file ."
 
 check a/d/file.x.y.z "default file.x.y.z"
