@@ -34,6 +34,7 @@ redoIfChange :: [FilePath] -> IO ()
 redoIfChange targets = buildTargets missingDo redoIfChange' targets
   where 
     redoIfChange' target doFile = do 
+      putStatusStrLn $ "redo-ifchange " ++ target
       upToDate' <- upToDate target doFile
       -- Try to run redo if out of date, if it fails, print an error message:
       unless upToDate' $ build target doFile
@@ -102,6 +103,12 @@ runDoFile target doFile = do
   absoluteTargetPath <- makeAbsolute target
   --putErrorStrLn $ absoluteTargetPath
   --putErrorStrLn $ redoInitPath
+  -- TODO: fix the make Relative here for the case:
+  -- /Users/dinkel/projects/asteria/FSW-experimental-build/Fw/Log/Build/Darwin/Unit/LogPacket.o
+  -- /Users/dinkel/projects/asteria/FSW-experimental-build/ASTERIA/Components/ComLogger
+  -- redo          /Users/dinkel/projects/asteria/FSW-experimental-build/Fw/Log/Build/Darwin/Unit/LogPacket.o
+  -- desired output:
+  -- redo          ../../../Fw/Log/Build/Darwin/Unit/LogPacket.o
   putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 

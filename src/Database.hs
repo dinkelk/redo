@@ -20,6 +20,8 @@ import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
 import System.Environment (lookupEnv)
+import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSize)
+import Data.Time (UTCTime)
 
 import PrettyPrint
 import Helpers
@@ -116,7 +118,7 @@ upToDate :: FilePath -> FilePath -> IO Bool
 upToDate target doFile =
   -- If the target has not been built, then it is obviously not up-to-date, otherwise check it's dependencies
   --hasTargetBeenBuilt target >>= bool (return False) (newDoFileFound)
-  hasTargetBeenBuilt target >>= bool (do putWarningStrLn "target hasnt been built"
+  hasTargetBeenBuilt target >>= bool (do --putWarningStrLn "target hasnt been built"
                                          return False) (newDoFileFound)
   where 
     -- Is the do file we found to build this file different than the do file it was built with last time?
@@ -177,7 +179,7 @@ upToDate target doFile =
       -- Get the dependency to hash (phony or real). It it exists, calculate and 
       -- compare the hash. Otherwise, we know we are not up to date because the dep 
       -- is missing.
-      maybe (do putWarningStrLn $ "build dep doesn't exist for " ++ target ++ " -- " ++ doFile ++ " --------------- " ++ dep
+      maybe (do --putWarningStrLn $ "build dep doesn't exist for " ++ target ++ " -- " ++ doFile ++ " --------------- " ++ dep
                 return False) (compareHash hashFile) =<< getBuiltTargetPath depFullPath
       where
         depFullPath = doFileDir </> dep
@@ -188,7 +190,7 @@ upToDate target doFile =
               newHash <- computeHash depToHash
               -- If the dependency is not up-to-date, then return false
               -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-              if oldHash /= newHash then do putWarningStrLn $ "hashes dont match" 
+              if oldHash /= newHash then do --putWarningStrLn $ "hashes dont match" 
                                             return False
               -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
               -- Otherwise, we need to check if the dep itself is up to date, so recurse.
@@ -305,11 +307,17 @@ storePhonyTarget target = createEmptyDepFile =<< phonyFile target
 -- TODO: implement timestamps, also make hash stored as binary
 computeHash :: FilePath -> IO BS.ByteString
 computeHash file = do 
-  isDir <- doesDirectoryExist file
-  if isDir then do
-    timestamp <- getModificationTime file
-    return $ BS.pack $ show timestamp
-  else hash `liftM` BS.readFile file
+  --isDir <- doesDirectoryExist file
+  --if isDir then do
+  --  timestamp <- getModificationTime file
+  --  return $ BS.pack $ show timestamp
+  --else do
+  --  timestamp <- getModificationTime file
+  --  return $ BS.pack $ show timestamp
+     -- hash `liftM` BS.readFile file
+  --------------------------------------------
+  st <- getFileStatus file
+  return $ BS.pack $ (show $ modificationTimeHiRes st) ++ (show $ fileID st) ++ (show $ fileSize st)
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
