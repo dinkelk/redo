@@ -28,7 +28,6 @@ performActionInDir dir action target = do
   action target
   setCurrentDirectory topDir
 
--- Todo: hash do files for each target on build, and use the hashes on ifchange
 findDoFile :: FilePath -> IO (Maybe FilePath)
 findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< doesFileExist targetDo
   where
@@ -38,7 +37,7 @@ findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< 
     -- found or "/" is reached.
     defaultDoPath :: FilePath -> IO (Maybe FilePath)
     defaultDoPath dir = do
-      absPath' <- canonicalizePath dir
+      absPath' <- makeAbsolute dir
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
       doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
       if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 

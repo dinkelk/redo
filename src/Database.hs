@@ -15,7 +15,7 @@ import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (fromJust)
 import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (getAppUserDataDirectory, makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (canonicalizePath, getAppUserDataDirectory, makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
@@ -32,7 +32,7 @@ metaDir = getAppUserDataDirectory "redo"
 depFileDir :: FilePath -> IO (FilePath)
 depFileDir target = do
   metaRoot <- metaDir 
-  absPath <- makeAbsolute target
+  absPath <- canonicalizePath target
   return $ metaRoot </> (pathify $ hashString absPath)
   where 
     hashString string = hex $ BS.unpack $ hash $ BS.pack string
@@ -59,7 +59,7 @@ initializeMetaDepsDir target doFile = f =<< depFileDir target
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 cacheDoFile :: FilePath -> FilePath -> IO ()
 cacheDoFile target doFile = do dir <- depFileDir target
-                               absoluteDoFile <- makeAbsolute doFile
+                               absoluteDoFile <- canonicalizePath doFile
                                writeFile (dir </> ".do.do.") absoluteDoFile
 
 -- Retrieve the cached do file path
@@ -116,18 +116,26 @@ upToDate :: FilePath -> FilePath -> IO Bool
 upToDate target doFile =
   -- If the target has not been built, then it is obviously not up-to-date, otherwise check it's dependencies
   --hasTargetBeenBuilt target >>= bool (return False) (newDoFileFound)
-  hasTargetBeenBuilt target >>= bool (return False) (newDoFileFound)
+  hasTargetBeenBuilt target >>= bool (do putWarningStrLn "target hasnt been built"
+                                         return False) (newDoFileFound)
   where 
     -- Is the do file we found to build this file different than the do file it was built with last time?
     -- If so, we know that the file needs to be rebuilt with the new do file, so return False.
     newDoFileFound :: IO Bool
     newDoFileFound = do
-      absDoFile <- makeAbsolute doFile
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
       if (takeExtension target) == ".do" then depsUpToDate
       -- See if a new do file was found for this target compared to what built it last time
-      else maybe (return False) (checkDepsIfPathsEqual absDoFile) =<< getCachedDoFile target
+      else do
+        --cachedDo <- getCachedDoFile target
+        absDoFile <- canonicalizePath doFile
+        --putWarningStrLn $ target
+        --putWarningStrLn $ show $ Just absDoFile
+        --putWarningStrLn $ show $ cachedDo 
+        --putWarningStrLn $ "YESYESYESYES: " ++ show ((show $ Just absDoFile) == (show $ cachedDo))
+        --putWarningStrLn $ "--------------------"
+        maybe (return False) (checkDepsIfPathsEqual absDoFile) =<< getCachedDoFile target
       where checkDepsIfPathsEqual path1 path2 = if path1 /= path2 then return False else depsUpToDate
     -- Does a target have tracked dependencies, or is it a source file? If so, are they up to date?
     depsUpToDate :: IO Bool
@@ -169,7 +177,8 @@ upToDate target doFile =
       -- Get the dependency to hash (phony or real). It it exists, calculate and 
       -- compare the hash. Otherwise, we know we are not up to date because the dep 
       -- is missing.
-      maybe (return False) (compareHash hashFile) =<< getBuiltTargetPath depFullPath
+      maybe (do putWarningStrLn $ "build dep doesn't exist for " ++ target ++ " -- " ++ doFile ++ " --------------- " ++ dep
+                return False) (compareHash hashFile) =<< getBuiltTargetPath depFullPath
       where
         depFullPath = doFileDir </> dep
         -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
@@ -179,10 +188,11 @@ upToDate target doFile =
               newHash <- computeHash depToHash
               -- If the dependency is not up-to-date, then return false
               -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-              if oldHash /= newHash then return False
+              if oldHash /= newHash then do putWarningStrLn $ "hashes dont match" 
+                                            return False
               -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
               -- Otherwise, we need to check if the dep itself is up to date, so recurse.
-              else maybe (return True) (upToDate depFullPath) =<< findDoFile dep)
+              else maybe (return True) (upToDate depFullPath) =<< findDoFile depFullPath)
           -- Ignore "." and ".." directories by returning true, return false if file dep doesn't exist
           (\e -> return (ioeGetErrorType e == InappropriateType))
 
