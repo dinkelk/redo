@@ -5,7 +5,7 @@
 -- System imports:
 import Control.Monad (unless, when)
 import Data.List (intercalate)
-import Data.Maybe (isNothing, fromJust)
+import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
 import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
@@ -103,8 +103,9 @@ main = do
   mainToRun' progName =<< targetsToRun targets
   where
     -- Shuffle the targets if required:
-    targetsToRun targets = do shuffleTargets <- lookupEnv "REDO_SHUFFLE"
-                              if isNothing shuffleTargets then return targets 
+    targetsToRun targets = do shuffleTargets' <- lookupEnv "REDO_SHUFFLE"
+                              let shuffleTargets = fromMaybe "" shuffleTargets'
+                              if null shuffleTargets then return targets 
                               else shuffle targets
     -- Check if redo is being run from inside of a .do file, or if this is the top level run
     -- Run the correct main accordingly
