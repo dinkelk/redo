@@ -8,20 +8,15 @@ import Control.Applicative ((<$>),(<*>))
 import Control.Monad (liftM, guard)
 import Control.Exception (catch, catchJust, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
---import Data.Digest.Pure.MD5 (md5)
---import qualified Data.ByteString.Lazy as BL
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import Data.Maybe (fromJust)
-import GHC.IO.Exception (IOErrorType(..))
-import System.Directory (canonicalizePath, getAppUserDataDirectory, makeAbsolute, getModificationTime, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (removeFile, canonicalizePath, getAppUserDataDirectory, makeAbsolute, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
-import System.IO.Error (ioeGetErrorType, isDoesNotExistError)
-import System.Environment (lookupEnv, getEnv)
+import System.IO.Error (isDoesNotExistError)
+import System.Environment (getEnv)
 import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSize)
-import Data.Time (UTCTime)
 import System.FilePath.Glob (globDir1, compile)
 
 import PrettyPrint
@@ -68,13 +63,13 @@ cacheDoFile target doFile = do dir <- depFileDir target
 -- Retrieve the cached do file path
 getCachedDoFile :: FilePath -> IO (Maybe FilePath)
 getCachedDoFile target = do dir <- depFileDir target
-                            getCachedDoFile' dir target
+                            getCachedDoFile' dir
 
-getCachedDoFile' :: FilePath -> FilePath -> IO (Maybe FilePath)
-getCachedDoFile' depFileDir target = bool (return Nothing) (readCache doFileCache) =<< doesFileExist doFileCache
-  where doFileCache = depFileDir </> ".do.do."
-        readCache doFileCache = do doFile <- readFile doFileCache
-                                   return $ Just doFile
+getCachedDoFile' :: FilePath -> IO (Maybe FilePath)
+getCachedDoFile' metaDepsDir = bool (return Nothing) (readCache doFileCache) =<< doesFileExist doFileCache
+  where doFileCache = metaDepsDir </> ".do.do."
+        readCache cachedDo = do doFile <- readFile cachedDo
+                                return $ Just doFile
 
 -- Return the lock file name for a target:
 createLockFile :: FilePath -> IO (FilePath)
@@ -111,56 +106,57 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 -- ~ redo-always
 -- % redo-ifcreate
 -- @ redo-ifchange
--- # phony target (.do file that doesn't write to stdout or $3)
 #define ifchange_dependency_prepend '@'
 #define ifcreate_dependency_prepend '%'
 #define always_dependency_prepend '~'
-#define phony_target_prepend '#'
-
 
 upToDate :: FilePath -> FilePath -> IO Bool
 upToDate = upToDate' ""
 
-
+-- TODO: refactor this function into two,
 -- Returns true if all dependencies are up-to-date, or target is a source file, false otherwise.
 upToDate' :: String -> FilePath -> FilePath -> IO Bool
 upToDate' debugSpacing target doFile = do
-    return () `debug'` "=checking   "
-    -- If we have already checked off this target as up to date, there is no need to check again
-    clean <- isTargetMarkedClean target
-    if clean then return True `debug'` "+clean    "
-    else do 
+  return () `debug'` "=checking   "
+  depDir <- depFileDir target
+  hasMetaDeps <- doesDirectoryExist depDir
+  targetExists <- doesTargetExist target
+  case (targetExists, hasMetaDeps) of 
+    -- If no meta data for this target is stored and it doesn't exist than it has never been built
+    (False, False) -> return False `debug'` "+not built  "
+    -- If the target exists on the filesystem but does not have meta deps dir then redo never
+    -- created it. It must be a source file so it is up to date.
+    (True, False) -> return True `debug'` "+source    "
+    -- If the meta deps dir exists, then we need to check extra info contained within it to determine
+    -- if the target is up to date:
+    (_, True) -> do
+      -- TODO
       --dirty <- isTargetMarkedDirty target
       --if dirty then return False `debug'` "-dirty    "
       --else do
-        depDir <- depFileDir target
-        hasMetaDeps <- doesDirectoryExist depDir
-        targetExists <- doesTargetExist target
-        -- If the target exists on the filesystem but does not have meta deps dir then redo never
-        -- created it. It must be a source file so it is up to date.
-        if targetExists && not hasMetaDeps then return True `debug'` "+source    "
+      -- If we have already checked off this target as up to date, there is no need to check again
+      clean <- isTargetMarkedClean' depDir
+      if clean then return True `debug'` "+clean      "
+      else do 
+        let phonyTarget = phonyFile' depDir
+        phonyTargetExists <- doesFileExist phonyTarget
+        let existingTarget = if targetExists then target
+                             else if phonyTargetExists then phonyTarget else ""
+        -- If neither a target or a phony target exists, then the target is obviously not up to date
+        if null existingTarget then return False `debug'` "-not built  "
         else do
-          let phonyTarget = depDir </> escapePhonyPath 
-          phonyTargetExists <- doesFileExist phonyTarget
-          let existingTarget = if targetExists then target
-                               else if phonyTargetExists then phonyTarget
-                                    else ""
-          -- If neither a target or a phony target exists, then the target is obviously not up to date
-          if null existingTarget then return False `debug'` "-not built  "
+          absDoFile <- canonicalizePath doFile
+          newDo <- newDoFile depDir absDoFile
+          -- If the target exists but a new do file was found for it then we need to rebuilt it, so
+          -- it is not up to date.
+          if newDo then return False `debug'` "-new .do   "
           else do
-            absDoFile <- canonicalizePath doFile
-            newDo <- newDoFile depDir absDoFile
-            -- If the target exists but a new do file was found for it then we need to rebuilt it, so
-            -- it is not up to date.
-            if newDo then return False `debug'` "-new .do   "
-            else do
-              let doFileDir = takeDirectory absDoFile
-              -- If all of the dependencies are up to date then this target is also up to date, so mark it
-              -- as such and return true.
-              depsClean <- depsUpToDate depDir doFileDir 
-              -- TODO: optimize marking
-              if depsClean then (return True) `debug'` "+deps clean "
-              else return False `debug'` "-deps dirty "
+            let doFileDir = takeDirectory absDoFile
+            -- If all of the dependencies are up to date then this target is also up to date, so mark it
+            -- as such and return true.
+            depsClean <- depsUpToDate depDir doFileDir 
+            if depsClean then (markTargetClean' depDir >> return True) `debug'` "+deps clean "
+            else return False `debug'` "-deps dirty "
   where 
     -- Convenient debug function:
     debug' a string = debug a (debugSpacing ++ string ++ " -- " ++ target)
@@ -168,6 +164,8 @@ upToDate' debugSpacing target doFile = do
     -- TODO Optimise marking
     --returnFalse = do markTargetDirty target 
     --                 return False
+    isTargetMarkedClean' :: FilePath -> IO Bool 
+    isTargetMarkedClean' metaDepsDir = doesFileExist =<< checkedFile' metaDepsDir
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: FilePath -> FilePath -> IO Bool
     newDoFile metaDepsDir absDoFile = 
@@ -175,7 +173,7 @@ upToDate' debugSpacing target doFile = do
       -- otherwise we end up with uncorrect behavior
       if (takeExtension target) == ".do" then return False
       else do
-        maybe (return True) (pathsNotEqual absDoFile) =<< getCachedDoFile' metaDepsDir target
+        maybe (return True) (pathsNotEqual absDoFile) =<< getCachedDoFile' metaDepsDir
       where pathsNotEqual path1 path2 = if path1 /= path2 then return True else return False
     -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date?
     depsUpToDate :: FilePath -> FilePath ->  IO Bool
@@ -184,7 +182,6 @@ upToDate' debugSpacing target doFile = do
       if anyAlwaysDeps depHashFiles then return False `debug` "-dep always "
       else do 
         -- redo-ifcreate - if one of those files was created, we need to return False immediately
-        -- TODO (do i need doFIleDir </> in here like below?)
         depCreated' <- or `liftM` mapM (depCreated . unEscapeIfCreatePath) (ifCreateDeps depHashFiles)
         if depCreated' then return False `debug` "-dep created"
         -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
@@ -209,13 +206,13 @@ upToDate' debugSpacing target doFile = do
       -- Get the dependency to hash (phony or real). It it exists, calculate and 
       -- compare the hash. Otherwise, we know we are not up to date because the dep 
       -- is missing.
-      -- TODO: optimize?
-      maybe (return False `debug'` "dep missing") (compareHash depFullPath hashFullPath) =<< getBuiltTargetPath depFullPath
+      -- TODO: optimize? need to refactor entire function that way do file getMetaDir is only called once per dep
+      maybe (return False `debug'` "-dep missing") (compareHash depFullPath hashFullPath) =<< getBuiltTargetPath depFullPath
       where
         -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
         compareHash :: FilePath -> FilePath -> FilePath -> IO Bool
-        compareHash depFullPath hashFile depToHash = do
-          oldHash <- BS.readFile hashFile
+        compareHash depFullPath hashFullPath depToHash = do
+          oldHash <- BS.readFile hashFullPath 
           newHash <- computeHash depToHash
           -- If the dependency is not up-to-date, then return false
           -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
@@ -239,12 +236,6 @@ escapeIfCreatePath :: FilePath -> FilePath
 escapeIfCreatePath = escapeDependencyPath ifcreate_dependency_prepend
 unEscapeIfCreatePath :: FilePath -> FilePath 
 unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
-
-escapeAlwaysPath :: FilePath
-escapeAlwaysPath = escapeDependencyPath always_dependency_prepend "redo-always"
-
-escapePhonyPath :: FilePath
-escapePhonyPath = escapeDependencyPath phony_target_prepend "phony-target"
 
 -- This is the same as running normalise, but it always removes the trailing path
 -- separator, and it always keeps a "./" in front of things in the current directory
@@ -289,18 +280,17 @@ storeIfCreateDependencies = storeDependencies storeIfCreateDep
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
 storeAlwaysDependency = do 
-  -- TODO: change lookupEnvs to get envs where we know that the variable exists
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  performActionInDir (fromJust parentRedoPath) storeAlwaysDep $ fromJust parentRedoTarget
+  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- getEnv "REDO_TARGET"
+  performActionInDir parentRedoPath storeAlwaysDep $ parentRedoTarget
 
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()  
 storeDependencies storeAction dependencies = do 
-  parentRedoPath <- lookupEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- lookupEnv "REDO_TARGET"
-  dependenciesRel2Parent <- makeRelativeToParent (fromJust parentRedoPath) dependencies 
-  mapM_ (performActionInDir (fromJust parentRedoPath) (storeAction $ fromJust parentRedoTarget) ) dependenciesRel2Parent
+  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
+  parentRedoTarget <- getEnv "REDO_TARGET"
+  dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
+  mapM_ (performActionInDir parentRedoPath (storeAction parentRedoTarget)) dependenciesRel2Parent
   where
     makeRelativeToParent :: FilePath -> [FilePath] -> IO ([FilePath])
     makeRelativeToParent parent targets = do
@@ -332,15 +322,19 @@ storePhonyTarget target = createEmptyDepFile =<< phonyFile target
 -- Store a file to signify that this file has been checked, and is up
 -- to date for this session.
 markTargetClean :: FilePath -> IO ()
-markTargetClean target = createEmptyDepFile =<< checkedFile target
+markTargetClean target = markTargetClean' =<< depFileDir target
+
+markTargetClean' :: FilePath -> IO ()
+markTargetClean' metaDepsDir = do
+  removeOldSessionFiles
+  createEmptyDepFile =<< checkedFile' metaDepsDir
+  where removeOldSessionFiles = mapM_ safeRemove =<< globDir1 pattern metaDepsDir
+        safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
+        pattern = compile ".chk.*.chk." 
 
 -- Retrieve the cached do file path
 isTargetMarkedClean :: FilePath -> IO (Bool)
-isTargetMarkedClean target = do file <- checkedFile target
-                                bool (return False) (removeOldSessionFiles >> return True) =<< doesFileExist file
-  where removeOldSessionFiles = globDir1 pattern =<< depFileDir target
-        pattern = compile ".chk.*.chk." 
-
+isTargetMarkedClean target = doesFileExist =<< checkedFile target
 
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
@@ -387,16 +381,19 @@ ifChangeDepFile :: FilePath -> FilePath -> IO (FilePath)
 ifChangeDepFile = depFile escapeIfChangePath
 ifCreateDepFile :: FilePath -> FilePath -> IO (FilePath)
 ifCreateDepFile = depFile escapeIfCreatePath
--- TODO: optimize this... we dont need to escape either of the two functions below
 alwaysDepFile :: FilePath -> IO (FilePath)
 alwaysDepFile target = f =<< depFileDir target 
-  where f depDir = return $ depDir </> escapeAlwaysPath
+  where f depDir = return $ depDir </> "." ++ [always_dependency_prepend] ++ "redo-always" ++ [always_dependency_prepend] ++ "."
 phonyFile :: FilePath -> IO (FilePath)
 phonyFile target = do depDir <- depFileDir target 
                       return $ phonyFile' depDir
 phonyFile' :: FilePath -> FilePath
-phonyFile' metaDepsDir = metaDepsDir </> escapePhonyPath 
+phonyFile' metaDepsDir = metaDepsDir </> "." ++ "phony-target" ++ "."
+-- todo instead of metaDepsDir, maybe we can simplify this and just call it the target's db entry or something..?
+-- then we should get rid of any function referencing by target. Everything should be given a metadeps dir instead?
 checkedFile :: FilePath -> IO (FilePath)
 checkedFile target = do depDir <- depFileDir target
-                        f depDir =<< getEnv "REDO_SESSION"
+                        checkedFile' depDir
+checkedFile' :: FilePath -> IO (FilePath)
+checkedFile' metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
   where f depDir session = return $ depDir </> ".chk." ++ session  ++ ".chk."
