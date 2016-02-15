@@ -131,41 +131,44 @@ upToDate' debugSpacing target doFile = do
     -- if the target is up to date:
     (_, True) -> do
       -- TODO
-      --dirty <- isTargetMarkedDirty target
-      --if dirty then return False `debug'` "-dirty    "
-      --else do
-      -- If we have already checked off this target as up to date, there is no need to check again
-      clean <- isTargetMarkedClean' depDir
-      if clean then return True `debug'` "+clean      "
-      else do 
-        let phonyTarget = phonyFile' depDir
-        phonyTargetExists <- doesFileExist phonyTarget
-        let existingTarget = if targetExists then target
-                             else if phonyTargetExists then phonyTarget else ""
-        -- If neither a target or a phony target exists, then the target is obviously not up to date
-        if null existingTarget then return False `debug'` "-not built  "
-        else do
-          absDoFile <- canonicalizePath doFile
-          newDo <- newDoFile depDir absDoFile
-          -- If the target exists but a new do file was found for it then we need to rebuilt it, so
-          -- it is not up to date.
-          if newDo then return False `debug'` "-new .do   "
+      dirty <- isTargetMarkedDirty' target
+      if dirty then return False `debug'` "-dirty    "
+      else do
+        -- If we have already checked off this target as up to date, there is no need to check again
+        clean <- isTargetMarkedClean' depDir
+        if clean then return True `debug'` "+clean      "
+        else do 
+          let phonyTarget = phonyFile' depDir
+          phonyTargetExists <- doesFileExist phonyTarget
+          let existingTarget = if targetExists then target
+                               else if phonyTargetExists then phonyTarget else ""
+          -- If neither a target or a phony target exists, then the target is obviously not up to date
+          if null existingTarget then (returnFalse depDir) `debug'` "-not built  "
           else do
-            let doFileDir = takeDirectory absDoFile
-            -- If all of the dependencies are up to date then this target is also up to date, so mark it
-            -- as such and return true.
-            depsClean <- depsUpToDate depDir doFileDir 
-            if depsClean then (markTargetClean' depDir >> return True) `debug'` "+deps clean "
-            else return False `debug'` "-deps dirty "
+            absDoFile <- canonicalizePath doFile
+            newDo <- newDoFile depDir absDoFile
+            -- If the target exists but a new do file was found for it then we need to rebuilt it, so
+            -- it is not up to date.
+            if newDo then (returnFalse depDir) `debug'` "-new .do   "
+            else do
+              let doFileDir = takeDirectory absDoFile
+              -- If all of the dependencies are up to date then this target is also up to date, so mark it
+              -- as such and return true.
+              depsClean <- depsUpToDate depDir doFileDir 
+              if depsClean then (returnTrue depDir) `debug'` "+deps clean "
+              else (returnFalse depDir) `debug'` "-deps dirty "
   where 
     -- Convenient debug function:
     debug' a string = debug a (debugSpacing ++ string ++ " -- " ++ target)
+    
+    -- Function which returns true and marks the target as clean:
+    returnTrue metaDepsDir = markTargetClean' metaDepsDir >> return True
     -- Function which returns false and marks the target as dirty:
-    -- TODO Optimise marking
-    --returnFalse = do markTargetDirty target 
-    --                 return False
+    returnFalse metaDepsDir = markTargetDirty' metaDepsDir >> return False
     isTargetMarkedClean' :: FilePath -> IO Bool 
-    isTargetMarkedClean' metaDepsDir = doesFileExist =<< checkedFile' metaDepsDir
+    isTargetMarkedClean' metaDepsDir = doesFileExist =<< cleanFile' metaDepsDir
+    isTargetMarkedDirty' :: FilePath -> IO Bool 
+    isTargetMarkedDirty' metaDepsDir = doesFileExist =<< dirtyFile' metaDepsDir
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: FilePath -> FilePath -> IO Bool
     newDoFile metaDepsDir absDoFile = 
@@ -186,6 +189,7 @@ upToDate' debugSpacing target doFile = do
         if depCreated' then return False `debug` "-dep created"
         -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
         --                 then recursively check their dependencies to see if they are up to date
+        -- how to we exit out of this early if a false is returned?
         else and `liftM` mapM (ifChangeDepsUpToDate metaDepsDir doFileDir) (ifChangeDeps depHashFiles)
     -- Returns true if there are any "-always" dependencies present:
     anyAlwaysDeps = any (fileHasPrepend always_dependency_prepend) 
@@ -326,15 +330,24 @@ markTargetClean target = markTargetClean' =<< depFileDir target
 
 markTargetClean' :: FilePath -> IO ()
 markTargetClean' metaDepsDir = do
-  removeOldSessionFiles
-  createEmptyDepFile =<< checkedFile' metaDepsDir
-  where removeOldSessionFiles = mapM_ safeRemove =<< globDir1 pattern metaDepsDir
+  removeSessionFiles metaDepsDir
+  createEmptyDepFile =<< cleanFile' metaDepsDir
+
+markTargetDirty' :: FilePath -> IO ()
+markTargetDirty' metaDepsDir = do
+  removeSessionFiles metaDepsDir
+  -- TODO: make createEmptyDepFile actually empty. Just use posix "touch" this will make writing a reading more atomic
+  -- anyways
+  createEmptyDepFile =<< dirtyFile' metaDepsDir
+
+removeSessionFiles :: FilePath -> IO ()
+removeSessionFiles metaDepsDir = removeFiles ".cln.*.cln." >> removeFiles ".drt.*.drt." 
+  where removeFiles globString = mapM_ safeRemove =<< globDir1 (compile globString) metaDepsDir
         safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
-        pattern = compile ".chk.*.chk." 
 
 -- Retrieve the cached do file path
 isTargetMarkedClean :: FilePath -> IO (Bool)
-isTargetMarkedClean target = doesFileExist =<< checkedFile target
+isTargetMarkedClean target = doesFileExist =<< cleanFile target
 
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
@@ -391,9 +404,13 @@ phonyFile' :: FilePath -> FilePath
 phonyFile' metaDepsDir = metaDepsDir </> "." ++ "phony-target" ++ "."
 -- todo instead of metaDepsDir, maybe we can simplify this and just call it the target's db entry or something..?
 -- then we should get rid of any function referencing by target. Everything should be given a metadeps dir instead?
-checkedFile :: FilePath -> IO (FilePath)
-checkedFile target = do depDir <- depFileDir target
-                        checkedFile' depDir
-checkedFile' :: FilePath -> IO (FilePath)
-checkedFile' metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
-  where f depDir session = return $ depDir </> ".chk." ++ session  ++ ".chk."
+cleanFile :: FilePath -> IO (FilePath)
+cleanFile target = do depDir <- depFileDir target
+                      cleanFile' depDir
+cleanFile' :: FilePath -> IO (FilePath)
+cleanFile' metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
+  where f depDir session = return $ depDir </> ".cln." ++ session  ++ ".cln."
+
+dirtyFile' :: FilePath -> IO (FilePath)
+dirtyFile' metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
+  where f depDir session = return $ depDir </> ".drt." ++ session  ++ ".drt."

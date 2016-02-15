@@ -34,7 +34,7 @@ redoIfChange :: [FilePath] -> IO ()
 redoIfChange targets = buildTargets missingDo redoIfChange' targets
   where 
     redoIfChange' target doFile = do 
-      putStatusStrLn $ "redo-ifchange " ++ target
+      --putStatusStrLn $ "redo-ifchange " ++ target
       upToDate' <- upToDate target doFile
       -- Try to run redo if out of date, if it fails, print an error message:
       unless upToDate' $ build target doFile
