@@ -1,17 +1,22 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile, getTargetRel2Do, doesTargetExist) where
+module Helpers(performActionInDir, findDoFile, getTargetRel2Do, doesTargetExist, debug) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
 import Control.Monad (liftM, filterM)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
+import Debug.Trace (trace)
 import System.FilePath (makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
 import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, canonicalizePath, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 
 import PrettyPrint
+
+-- Debug helpers:
+debug = flip trace
+--debug a b = a
 
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:

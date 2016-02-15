@@ -91,12 +91,14 @@ runDoFile target doFile = do
   redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
+  sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
   redoPath <- getCurrentDirectory                     -- Current redo path
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
+  let sessionNumber = fromMaybe "" sessionNumber'
   cmd <- shellCmd shellArgs doFile target
 
   -- Print what we are currently "redoing"
@@ -122,6 +124,7 @@ runDoFile target doFile = do
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
                       $ insert "REDO_PATH" redoPath
+                      $ insert "REDO_SESSION" sessionNumber
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
                       $ insert "REDO_DEPTH" redoDepth

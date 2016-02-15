@@ -115,6 +115,11 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [FilePath] -> IO()
 mainTop progName targets = do
+  -- Set a unique session number for this session:
+  -- TODO: shouldn't this be set even for redo started from a script? need to test
+  sessionNumber <- randomRIO (0, 1000000000000::Int)
+  setEnv "REDO_SESSION" (show $ sessionNumber)
+
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
