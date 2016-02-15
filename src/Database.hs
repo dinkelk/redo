@@ -5,7 +5,7 @@ module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDepen
                 storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile)  where
 
 import Control.Applicative ((<$>),(<*>))
-import Control.Monad (liftM, guard)
+import Control.Monad (liftM, guard, foldM)
 import Control.Exception (catch, catchJust, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
@@ -130,7 +130,7 @@ upToDate' debugSpacing target doFile = do
     -- If the meta deps dir exists, then we need to check extra info contained within it to determine
     -- if the target is up to date:
     (_, True) -> do
-      -- TODO
+      -- TODO may not need this? Why?
       dirty <- isTargetMarkedDirty' target
       if dirty then return False `debug'` "-dirty    "
       else do
@@ -156,7 +156,7 @@ upToDate' debugSpacing target doFile = do
               -- as such and return true.
               depsClean <- depsUpToDate depDir doFileDir 
               if depsClean then (returnTrue depDir) `debug'` "+deps clean "
-              else (returnFalse depDir) `debug'` "-deps dirty "
+              else (returnFalse depDir) -- `debug'` "-deps dirty "
   where 
     -- Convenient debug function:
     debug' a string = debug a (debugSpacing ++ string ++ " -- " ++ target)
@@ -185,12 +185,28 @@ upToDate' debugSpacing target doFile = do
       if anyAlwaysDeps depHashFiles then return False `debug` "-dep always "
       else do 
         -- redo-ifcreate - if one of those files was created, we need to return False immediately
-        depCreated' <- or `liftM` mapM (depCreated . unEscapeIfCreatePath) (ifCreateDeps depHashFiles)
+        depCreated' <- mapOr (depCreated . unEscapeIfCreatePath) (ifCreateDeps depHashFiles)
         if depCreated' then return False `debug` "-dep created"
         -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
         --                 then recursively check their dependencies to see if they are up to date
-        -- how to we exit out of this early if a false is returned?
-        else and `liftM` mapM (ifChangeDepsUpToDate metaDepsDir doFileDir) (ifChangeDeps depHashFiles)
+        else mapAnd (ifChangeDepsUpToDate metaDepsDir doFileDir) (ifChangeDeps depHashFiles)
+      where 
+        -- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation
+        -- if a "False" is found. This helps prevent infinite loops if dependencies are circular.
+        mapAnd :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
+        mapAnd func [] = return True
+        mapAnd func (x:xs) = do boolean <- func x
+                                if boolean then mapAnd func xs
+                                -- Optimization: cut the evaluation short if a single False is found
+                                else return False
+        -- Function which basically does "or `liftM` mapM" but has the optimization of not continuing evaluation
+        -- if a "True" is found.
+        mapOr :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
+        mapOr func [] = return False
+        mapOr func (x:xs) = do boolean <- func x
+                               -- Optimization: cut the evaluation short if a single True is found
+                               if boolean then return True
+                               else mapOr func xs
     -- Returns true if there are any "-always" dependencies present:
     anyAlwaysDeps = any (fileHasPrepend always_dependency_prepend) 
     -- Functions which filter a set of dependencies for only those made with "-ifchange" or "-ifcreate"
