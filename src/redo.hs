@@ -115,6 +115,9 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [FilePath] -> IO()
 mainTop progName targets = do
+  -- Remove any old lock files, the don't mean anything for this build
+  removeLockFiles
+
   -- Set a unique session number for this session:
   sessionNumber <- randomRIO (0, 1000000000000::Int)
   setEnv "REDO_SESSION" (show $ sessionNumber)

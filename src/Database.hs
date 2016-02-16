@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile)  where
+                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile, removeLockFiles)  where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (guard)
@@ -81,7 +81,7 @@ getCachedDoFile' metaDepsDir = bool (return Nothing) (readCache doFileCache) =<<
 createLockFile :: FilePath -> IO (FilePath)
 createLockFile target = do dir <- metaDir
                            hashedTarget <- hashString target
-                           return $ dir </> "." ++ hashedTarget ++ ".lck.lck."
+                           return $ dir </> ".lck." ++ hashedTarget ++ ".lck."
 
 -- Does a phony target file exist in the meta directory for a target?
 doesPhonyTargetExist :: FilePath -> IO Bool
@@ -362,9 +362,15 @@ markTargetDirty' metaDepsDir = do
   createEmptyDepFile =<< dirtyFile' metaDepsDir
 
 removeSessionFiles :: FilePath -> IO ()
-removeSessionFiles metaDepsDir = removeFiles ".cln.*.cln." >> removeFiles ".drt.*.drt." 
-  where removeFiles globString = mapM_ safeRemove =<< globDir1 (compile globString) metaDepsDir
-        safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
+removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir ".cln.*.cln." >> safeRemoveGlob metaDepsDir ".drt.*.drt." 
+
+removeLockFiles :: IO ()
+removeLockFiles = do dir <- metaDir
+                     safeRemoveGlob dir ".lck.*.lck."
+
+safeRemoveGlob :: FilePath -> String -> IO ()
+safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile globString) directory
+  where safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
 
 -- Retrieve the cached do file path
 isTargetMarkedClean :: FilePath -> IO (Bool)
