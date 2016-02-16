@@ -2,12 +2,11 @@
 -- {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Build(redo, redoIfChange) where
+module Build(redo, redoIfChange, makeRelative') where
 
 -- System imports:
 import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
-import Data.List (intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
@@ -15,7 +14,7 @@ import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDi
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
-import System.FilePath (joinPath, pathSeparator, splitDirectories, dropExtension, takeExtensions, takeFileName, makeRelative, dropExtensions)
+import System.FilePath (dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -105,15 +104,7 @@ runDoFile target doFile = do
 
   -- Print what we are currently "redoing"
   absoluteTargetPath <- makeAbsolute target
-  --putErrorStrLn $ absoluteTargetPath
-  --putErrorStrLn $ redoInitPath
-  -- TODO: fix the make Relative here for the case:
-  -- /Users/dinkel/projects/asteria/FSW-experimental-build/Fw/Log/Build/Darwin/Unit/LogPacket.o
-  -- /Users/dinkel/projects/asteria/FSW-experimental-build/ASTERIA/Components/ComLogger
-  -- redo          /Users/dinkel/projects/asteria/FSW-experimental-build/Fw/Log/Build/Darwin/Unit/LogPacket.o
-  -- desired output:
-  -- redo          ../../../Fw/Log/Build/Darwin/Unit/LogPacket.o
-  putRedoStatus (read redoDepth :: Int) (makeRelative redoInitPath absoluteTargetPath)
+  putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath absoluteTargetPath)
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
@@ -235,17 +226,6 @@ shellCmd shellArgs doFile target = do
       where 
         readFirstLine = catch (withFile file ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
-
--- Removes ".." and "." directories when possible:
-removeDotDirs :: FilePath -> FilePath
-removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath)
-  where removeParents' :: [String] -> [String] -> [String] 
-        removeParents' [] [] = []
-        removeParents' path [] = path
-        removeParents' [] (h:hs) = removeParents' [h] hs
-        removeParents' path (h:hs) = if h == "." then removeParents' path hs
-                                     else if (h == "..") && (last path /= "") then removeParents' (init path) hs
-                                          else removeParents' (path ++ [h]) hs
 
 -- Temporary files:
 tmp3File :: FilePath -> FilePath

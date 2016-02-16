@@ -5,7 +5,7 @@ module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDepen
                 storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile)  where
 
 import Control.Applicative ((<$>),(<*>))
-import Control.Monad (liftM, guard, foldM)
+import Control.Monad (guard)
 import Control.Exception (catch, catchJust, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
@@ -194,7 +194,7 @@ upToDate' debugSpacing target doFile = do
         -- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation
         -- if a "False" is found. This helps prevent infinite loops if dependencies are circular.
         mapAnd :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
-        mapAnd func [] = return True
+        mapAnd _ [] = return True
         mapAnd func (x:xs) = do boolean <- func x
                                 if boolean then mapAnd func xs
                                 -- Optimization: cut the evaluation short if a single False is found
@@ -202,7 +202,7 @@ upToDate' debugSpacing target doFile = do
         -- Function which basically does "or `liftM` mapM" but has the optimization of not continuing evaluation
         -- if a "True" is found.
         mapOr :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
-        mapOr func [] = return False
+        mapOr _ [] = return False
         mapOr func (x:xs) = do boolean <- func x
                                -- Optimization: cut the evaluation short if a single True is found
                                if boolean then return True

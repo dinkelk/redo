@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile, getTargetRel2Do, doesTargetExist, debug) where
+module Helpers(performActionInDir, findDoFile, getTargetRel2Do, doesTargetExist, debug, makeRelative', removeDotDirs) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
@@ -8,13 +8,14 @@ import Control.Monad (liftM, filterM)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import Debug.Trace (trace)
-import System.FilePath (makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
+import System.FilePath (joinPath, splitDirectories, makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
 import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, canonicalizePath, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 
 import PrettyPrint
 
 -- Debug helpers:
+debug :: c -> String -> c
 debug = flip trace
 --debug a b = a
 
@@ -70,4 +71,34 @@ getTargetRel2Do target doFile = do
 -- Does the target file or directory exist on the filesystem?
 doesTargetExist :: FilePath -> IO Bool
 doesTargetExist target = (||) <$> doesFileExist target <*> doesDirectoryExist target
+
+-- Removes ".." and "." directories when possible:
+removeDotDirs :: FilePath -> FilePath
+removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath)
+  where removeParents' :: [String] -> [String] -> [String] 
+        removeParents' [] [] = []
+        removeParents' path [] = path
+        removeParents' [] (h:hs) = removeParents' [h] hs
+        removeParents' path (h:hs) = if h == "." then removeParents' path hs
+                                     else if (h == "..") && (last path /= "") then removeParents' (init path) hs
+                                          else removeParents' (path ++ [h]) hs
+
+-- Find the shared root between two paths:
+findCommonRoot :: FilePath -> FilePath -> FilePath
+findCommonRoot filePath1 filePath2 = joinPath $ findCommonRoot' (splitDirectories filePath1) (splitDirectories filePath2)
+  where findCommonRoot' [] [] = []
+        findCommonRoot' _ [] = []
+        findCommonRoot' [] _ = []
+        findCommonRoot' (h1:path1) (h2:path2) = if h1 == h2 then [h1] ++ findCommonRoot' path1 path2
+                                                else []
+
+-- My version of makeRelative which actually works and inserts proper ".." where it can
+makeRelative' :: FilePath -> FilePath -> FilePath
+makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then (joinPath $ replicate numParentDirs "..") </> path2NoRoot
+                                    else filePath2
+  where commonRoot = findCommonRoot filePath1 filePath2
+        rootSize = length $ splitDirectories commonRoot
+        path1Size = length $ splitDirectories filePath1
+        numParentDirs = path1Size - rootSize
+        path2NoRoot = joinPath $ drop rootSize $ splitDirectories filePath2
 
