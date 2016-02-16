@@ -78,11 +78,6 @@ build target doFile = do
   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
 
--- runDoFileInDoDir :: FilePath -> FilePath -> IO ()
--- runDoFileInDoDir target doFile = do
---   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
---   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
-
 -- Run the do script. Note: this must be run in the do file's directory!:
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
