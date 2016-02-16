@@ -34,22 +34,23 @@ performActionInDir dir action target = do
   setCurrentDirectory topDir
 
 findDoFile :: FilePath -> IO (Maybe FilePath)
-findDoFile target = bool (defaultDoPath targetDir) (return $ Just targetDo) =<< doesFileExist targetDo
+findDoFile target = do 
+  (targetDir, targetName) <- splitFileName <$> canonicalizePath target
+  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist targetDo
   where
-    (targetDir, targetName) = splitFileName target
     targetDo = target ++ ".do"
     -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
     -- found or "/" is reached.
-    defaultDoPath :: FilePath -> IO (Maybe FilePath)
-    defaultDoPath dir = do
+    defaultDoPath :: FilePath -> FilePath -> IO (Maybe FilePath)
+    defaultDoPath dir name = do
       absPath' <- makeAbsolute dir
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
-      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath)
-      if isNothing doFile && not (isDrive absPath) then defaultDoPath $ takeDirectory absPath 
+      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath name)
+      if isNothing doFile && not (isDrive absPath) then defaultDoPath (takeDirectory absPath) name
       else return doFile
     -- List the possible default.do file candidates relative to the given path:
-    candidates path = map (path </>) defaults
-    defaults = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions targetName)
+    candidates path name = map (path </>) (defaults name)
+    defaults name = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions name)
     -- Form all possible matching default.do files in order of preference:
     getDefaultDo :: FilePath -> [FilePath]
     getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename

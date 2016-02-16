@@ -7,6 +7,7 @@ module Build(redo, redoIfChange) where
 -- System imports:
 import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
+import Data.List (intercalate)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
@@ -14,7 +15,7 @@ import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDi
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
-import System.FilePath (dropExtension, takeExtensions, takeFileName, makeRelative, dropExtensions)
+import System.FilePath (joinPath, pathSeparator, splitDirectories, dropExtension, takeExtensions, takeFileName, makeRelative, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -34,7 +35,7 @@ redoIfChange :: [FilePath] -> IO ()
 redoIfChange targets = buildTargets missingDo redoIfChange' targets
   where 
     redoIfChange' target doFile = do 
-      --putStatusStrLn $ "redo-ifchange " ++ target
+      putStatusStrLn $ "redo-ifchange " ++ target
       upToDate' <- upToDate target doFile
       -- Try to run redo if out of date, if it fails, print an error message:
       unless upToDate' $ build target doFile
@@ -74,6 +75,7 @@ buildTargets failAction buildFunc targets = do
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()
 build target doFile = do
+  putStatusStrLn $ "running " ++ doFile
   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
 
@@ -208,7 +210,8 @@ runDoFile target doFile = do
 shellCmd :: String -> FilePath -> FilePath -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, show doFile, show target, show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
+  return $ unwords [shebang, show doFile, show $ removeDotDirs target, show $ removeDotDirs arg2, 
+                      show $ removeDotDirs $ tmp3File target, ">", show $ tmpStdoutFile target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
@@ -233,12 +236,24 @@ shellCmd shellArgs doFile target = do
         readFirstLine = catch (withFile file ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
--- Temporary file names. Note we make these in the current directory, regardless of the target directory,
+-- Removes ".." and "." directories when possible:
+removeDotDirs :: FilePath -> FilePath
+removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath)
+  where removeParents' :: [String] -> [String] -> [String] 
+        removeParents' [] [] = []
+        removeParents' path [] = path
+        removeParents' [] (h:hs) = removeParents' [h] hs
+        removeParents' path (h:hs) = if h == "." then removeParents' path hs
+                                     else if (h == "..") && (last path /= "") then removeParents' (init path) hs
+                                          else removeParents' (path ++ [h]) hs
+
+-- Temporary files:
+tmp3File :: FilePath -> FilePath
+tmp3File target = target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmpStdoutFile :: FilePath -> FilePath
+-- Stdout file name. Note we make this in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
-tmp3File :: FilePath -> FilePath
-tmp3File target = takeFileName target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-tmpStdoutFile :: FilePath -> FilePath
 tmpStdoutFile target = takeFileName target ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
