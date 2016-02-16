@@ -30,13 +30,18 @@ metaDir = getAppUserDataDirectory "redo"
 depFileDir :: FilePath -> IO (FilePath)
 depFileDir target = do
   metaRoot <- metaDir 
-  absPath <- canonicalizePath target
-  return $ metaRoot </> (pathify $ hashString absPath)
+  hashedTarget <- hashString target
+  return $ metaRoot </> (pathify hashedTarget)
   where 
-    hashString string = hex $ BS.unpack $ hash $ BS.pack string
     pathify "" = ""
     pathify string = x </> pathify xs
       where (x,xs) = splitAt 2 string
+
+-- Create a hash string for a target:
+hashString :: FilePath -> IO (FilePath)
+hashString target = do 
+  absPath <- canonicalizePath target
+  return $ hex $ BS.unpack $ hash $ BS.pack absPath
 
 -- Create meta data folder for storing hashes and/or timestamps
 -- We store a dependency for the target on the do file
@@ -53,6 +58,7 @@ initializeMetaDepsDir target doFile = f =<< depFileDir target
           storeIfChangeDep target doFile
           -- Cache the do file:
           cacheDoFile target doFile
+          --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
           
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 cacheDoFile :: FilePath -> FilePath -> IO ()
@@ -73,9 +79,9 @@ getCachedDoFile' metaDepsDir = bool (return Nothing) (readCache doFileCache) =<<
 
 -- Return the lock file name for a target:
 createLockFile :: FilePath -> IO (FilePath)
-createLockFile target = do dir <- depFileDir target
-                           createDirectoryIfMissing True dir
-                           return $ dir </> ".lck.lck."
+createLockFile target = do dir <- metaDir
+                           hashedTarget <- hashString target
+                           return $ dir </> "." ++ hashedTarget ++ ".lck.lck."
 
 -- Does a phony target file exist in the meta directory for a target?
 doesPhonyTargetExist :: FilePath -> IO Bool
@@ -215,6 +221,7 @@ upToDate' debugSpacing target doFile = do
     -- Check if dep file begins with certain prepend string
     fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
     -- Has a dependency been created
+    -- TODO: This shouldn't be run if the file already was created, just the first time it was created.
     depCreated :: FilePath -> IO Bool
     depCreated dep = id <$> doesTargetExist dep 
     -- Are a target's redo-ifchange dependencies up to date?
