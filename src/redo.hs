@@ -116,7 +116,6 @@ main = do
 mainTop :: String -> [FilePath] -> IO()
 mainTop progName targets = do
   -- Set a unique session number for this session:
-  -- TODO: shouldn't this be set even for redo started from a script? need to test
   sessionNumber <- randomRIO (0, 1000000000000::Int)
   setEnv "REDO_SESSION" (show $ sessionNumber)
 

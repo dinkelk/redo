@@ -352,8 +352,6 @@ markTargetClean' metaDepsDir = do
 markTargetDirty' :: FilePath -> IO ()
 markTargetDirty' metaDepsDir = do
   removeSessionFiles metaDepsDir
-  -- TODO: make createEmptyDepFile actually empty. Just use posix "touch" this will make writing a reading more atomic
-  -- anyways
   createEmptyDepFile =<< dirtyFile' metaDepsDir
 
 removeSessionFiles :: FilePath -> IO ()

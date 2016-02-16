@@ -34,7 +34,7 @@ redoIfChange :: [FilePath] -> IO ()
 redoIfChange targets = buildTargets missingDo redoIfChange' targets
   where 
     redoIfChange' target doFile = do 
-      putStatusStrLn $ "redo-ifchange " ++ target
+      --putStatusStrLn $ "redo-ifchange " ++ target
       upToDate' <- upToDate target doFile
       -- Try to run redo if out of date, if it fails, print an error message:
       unless upToDate' $ build target doFile
@@ -74,7 +74,7 @@ buildTargets failAction buildFunc targets = do
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()
 build target doFile = do
-  putStatusStrLn $ "running " ++ doFile
+  --putStatusStrLn $ "running " ++ doFile
   (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
   performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
 
@@ -168,8 +168,6 @@ runDoFile target doFile = do
                               storePhonyTarget target)
       -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
       else storePhonyTarget target
-    -- TODO: This timestamp is only accurate to seconds. This would work much more consistantly if the time was
-    -- accurate to sub seconds
     getTargetModificationTime :: IO UTCTime
     getTargetModificationTime = do
       targetExists <- doesTargetExist target
