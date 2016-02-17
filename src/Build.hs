@@ -10,11 +10,11 @@ import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
-import System.Directory (getModificationTime, makeAbsolute, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (canonicalizePath, getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
-import System.FilePath (dropExtension, takeExtensions, takeFileName, dropExtensions)
+import System.FilePath (takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -57,7 +57,9 @@ buildTargets failAction buildFunc targets = do
   mapM_ waitBuild remainingTargets          
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
-    tryBuild target = maybe (failAction target >> return ("", "", "")) (tryBuild' target) =<< findDoFile target
+    tryBuild target = do 
+      absTarget <- canonicalizePath target
+      maybe (failAction absTarget >> return ("", "", "")) (tryBuild' absTarget) =<< findDoFile absTarget
     tryBuild' target doFile = do lckFileName <- createLockFile target 
                                  maybe (return (target, doFile, lckFileName)) (runBuild target doFile) 
                                    =<< tryLockFile lckFileName Exclusive
@@ -74,11 +76,13 @@ buildTargets failAction buildFunc targets = do
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()
 build target doFile = do
-  --putStatusStrLn $ "running " ++ doFile
-  (doFileDir, doFileName, targetRel2Do) <- getTargetRel2Do target doFile 
-  performActionInDir doFileDir (runDoFile targetRel2Do) doFileName
+  --putStatusStrLn $ "running " ++ doFile ++ " on " ++ target
+  -- TODO clean up
+  let doFileDir = takeDirectory doFile
+  performActionInDir doFileDir (runDoFile target) doFile 
 
 -- Run the do script. Note: this must be run in the do file's directory!:
+-- and the absolute target must be passed.
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
   -- Get some environment variables:
@@ -95,11 +99,11 @@ runDoFile target doFile = do
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
   let sessionNumber = fromMaybe "" sessionNumber'
-  cmd <- shellCmd shellArgs doFile target
+  let targetRel2Do = makeRelative' redoPath target
+  cmd <- shellCmd shellArgs doFile targetRel2Do
 
   -- Print what we are currently "redoing"
-  absoluteTargetPath <- makeAbsolute target
-  putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath absoluteTargetPath)
+  putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath target)
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
@@ -194,8 +198,7 @@ runDoFile target doFile = do
 shellCmd :: String -> FilePath -> FilePath -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, show doFile, show $ removeDotDirs target, show $ removeDotDirs arg2, 
-                      show $ removeDotDirs $ tmp3File target, ">", show $ tmpStdoutFile target]
+  return $ unwords [shebang, show doFile, show target, show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 

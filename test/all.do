@@ -9,6 +9,7 @@ fi
 # builds 1xx*/all
 /bin/ls 1[0-9][0-9]*/all.do |
 sed 's/\.do$//' |
+sed 's@103-unicode/all@@1' |
 xargs redo
 110-compile/hello >&2
 
