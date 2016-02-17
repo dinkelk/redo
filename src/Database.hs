@@ -136,8 +136,8 @@ upToDate' debugSpacing target doFile = do
     -- If the meta deps dir exists, then we need to check extra info contained within it to determine
     -- if the target is up to date:
     (_, True) -> do
-      -- TODO may not need this? Why?
-      dirty <- isTargetMarkedDirty' target
+      -- If we have already checked off this target as dirty, don't delay, return not up to date
+      dirty <- isTargetMarkedDirty' depDir
       if dirty then return False `debug'` "-dirty    "
       else do
         -- If we have already checked off this target as up to date, there is no need to check again
