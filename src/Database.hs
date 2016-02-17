@@ -2,7 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile, removeLockFiles)  where
+                storeAlwaysDependency, upToDate, noDoFileError, storePhonyTarget, createLockFile, removeLockFiles, 
+                markTargetClean', markTargetDirty') where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Monad (guard)
@@ -12,7 +13,7 @@ import Crypto.Hash.MD5 (hash)
 import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, fromJust)
-import System.Directory (removeFile, canonicalizePath, getAppUserDataDirectory, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (removeFile, getAppUserDataDirectory, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.IO.Error (isDoesNotExistError)
@@ -42,16 +43,17 @@ depFileDir target = do
       where (x,xs) = splitAt 2 string
 
 -- Create a hash string for a target:
+-- TODO remove canonicalize Path here
 hashString :: FilePath -> IO (FilePath)
 hashString target = do 
-  absPath <- canonicalizePath target
+  absPath <- canonicalizePath' target
   return $ hex $ BS.unpack $ hash $ BS.pack absPath
 
--- Create meta data folder for storing hashes and/or timestamps
+-- Create meta data folder for storing hashes and/or timestamps and return the folder name
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-initializeMetaDepsDir :: FilePath -> FilePath -> IO ()
+initializeMetaDepsDir :: FilePath -> FilePath -> IO (FilePath)
 initializeMetaDepsDir target doFile = f =<< depFileDir target
   where f metaDepsDir = do
           catchJust (guard . isDoesNotExistError)
@@ -63,6 +65,7 @@ initializeMetaDepsDir target doFile = f =<< depFileDir target
           -- Cache the do file:
           cacheDoFile target doFile
           --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
+          return metaDepsDir
           
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 cacheDoFile :: FilePath -> FilePath -> IO ()
@@ -132,7 +135,10 @@ upToDate absoluteTarget absoluteDoFile = do
   else upToDate2' 0 absoluteTarget depDir absoluteDoFile
   where
     -- Convenient debug function:
-    debug'' level target a string = debug a ((concat $ replicate level "  ") ++ string ++ " -- " ++ target)
+    debug'' level target a string = debug a (createSpaces (level*2) ++ string ++ createSpaces paddingToAppend ++ " -- " ++ target)
+      where createSpaces num = (concat $ replicate num " ") 
+            stringWidth = 12
+            paddingToAppend = stringWidth - length string
     -- Function which returns true and marks the target as clean:
     returnTrue metaDepsDir = markTargetClean' metaDepsDir >> return True
     -- Function which returns false and marks the target as dirty:
@@ -147,32 +153,32 @@ upToDate absoluteTarget absoluteDoFile = do
     -- target is "dirty" (False)
     getBuiltTargetIfUpToDate :: Int -> FilePath -> FilePath -> IO (Bool, FilePath)
     getBuiltTargetIfUpToDate level target depDir = do
-      return () `debug'` "=checking   "
+      return () `debug'` "=checking"
       hasMetaDeps <- doesDirectoryExist depDir
       targetExists <- doesTargetExist target
       case (targetExists, hasMetaDeps) of 
         -- If no meta data for this target is stored and it doesn't exist than it has never been built
-        (False, False) -> return (False, "")  `debug'` "+not built  "
+        (False, False) -> return (False, "")  `debug'` "+not built"
         -- If the target exists on the filesystem but does not have meta deps dir then redo never
         -- created it. It must be a source file so it is up to date.
-        (True, False) -> return (True, "") `debug'` "+source     "
+        (True, False) -> return (True, "") `debug'` "+source"
         -- If the meta deps dir exists, then we need to check extra info contained within it to determine
         -- if the target is up to date:
         (_, True) -> do
           dirty <- isTargetMarkedDirty' depDir
           -- If we have already checked off this target as dirty, don't delay, return not up to date
-          if dirty then return (False, "") `debug'` "-dirty    "
+          if dirty then return (False, "") `debug'` "-dirty"
           else do
             clean <- isTargetMarkedClean' depDir
             -- If we have already checked off this target as up to date, there is no need to check again
-            if clean then return (True, "") `debug'` "+clean      "
+            if clean then return (True, "") `debug'` "+clean"
             else do 
               let phonyTarget = phonyFile' depDir
               phonyTargetExists <- doesFileExist phonyTarget
               let existingTarget = if targetExists then target
                                    else if phonyTargetExists then phonyTarget else ""
               -- If neither a target or a phony target exists, then the target is obviously not up to date
-              if null existingTarget then (returnFalse' depDir) `debug'` "-not built  "
+              if null existingTarget then (returnFalse' depDir) `debug'` "-not built"
               else return (False, existingTarget)
       where 
         debug' a b = debug'' level target a b
@@ -190,7 +196,7 @@ upToDate absoluteTarget absoluteDoFile = do
       -- If no do file is found, but the meta dir exists, than this file used to be buildable, but is
       -- now a newly marked source file. So remove the meta dir and return true. There is no need to
       -- mark the file clean because the meta dir is removed.
-      if isNothing doFile then (removeDirectoryRecursive depDir >> return True) `debug'` "+new source "
+      if isNothing doFile then (removeDirectoryRecursive depDir >> return True) `debug'` "+new source"
       else upToDate2' level target depDir (fromJust doFile)
       where 
         debug' a b = debug'' level target a b
@@ -202,19 +208,19 @@ upToDate absoluteTarget absoluteDoFile = do
       newDo <- newDoFile depDir absDoFile
       -- If the target exists but a new do file was found for it then we need to rebuilt it, so
       -- it is not up to date.
-      if newDo then (returnFalse depDir) `debug'` "-new .do   "
+      if newDo then (returnFalse depDir) `debug'` "-new .do"
       else do
         let doFileDir = takeDirectory absDoFile
         -- If all of the dependencies are up to date then this target is also up to date, so mark it
         -- as such and return true. Else, return false.
         depsClean <- depsUpToDate level target depDir doFileDir 
-        if depsClean then (returnTrue depDir) `debug'` "+deps clean "
+        if depsClean then (returnTrue depDir) `debug'` "+deps clean"
         else (returnFalse depDir) -- `debug'` "-deps dirty "
       where 
         debug' a b = debug'' level target a b
         -- Does the target have a new do file from the last time it was built?
         newDoFile :: FilePath -> FilePath -> IO Bool
-        newDoFile metaDepsDir doFile = 
+        newDoFile metaDepsDir doFile =
           -- We shouldn't expect a do file to build another do file by default, so skip this check
           -- otherwise we end up with uncorrect behavior
           if (takeExtension target) == ".do" then return False

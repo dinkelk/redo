@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative') where
+module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative', canonicalizePath') where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
@@ -8,16 +8,16 @@ import Control.Monad (liftM, filterM)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import Debug.Trace (trace)
-import System.FilePath (joinPath, splitDirectories, makeRelative, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
-import System.Directory (setCurrentDirectory, doesFileExist, canonicalizePath, getCurrentDirectory, doesDirectoryExist)
+import System.FilePath (joinPath, splitDirectories, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
+import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
 
 import PrettyPrint
 
 -- Debug helpers:
 debug :: c -> String -> c
---debug = flip trace
-debug a b = a
+debug = flip trace
+--debug a b = a
 
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:
@@ -34,7 +34,7 @@ performActionInDir dir action target = do
 findDoFile :: FilePath -> IO (Maybe FilePath)
 findDoFile absTarget = do 
   let (targetDir, targetName) = splitFileName absTarget
-  let targetDo = absTarget ++ ".do" 
+  let targetDo = removeDotDirs $ absTarget ++ ".do" 
   bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist targetDo
   where
     -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
@@ -89,3 +89,7 @@ makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then (joinPath $ repli
         numParentDirs = path1Size - rootSize
         path2NoRoot = joinPath $ drop rootSize $ splitDirectories filePath2
 
+-- A faster version of canonicalizePath from System.Directory that doesn't care about resolving simlinks. This is
+-- not a necessary feature for redo, and it just slows us down.
+canonicalizePath' :: FilePath -> IO FilePath
+canonicalizePath' path = removeDotDirs <$> makeAbsolute path

@@ -10,7 +10,7 @@ import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
-import System.Directory (canonicalizePath, getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
@@ -58,7 +58,7 @@ buildTargets failAction buildFunc targets = do
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild target = do 
-      absTarget <- canonicalizePath target
+      absTarget <- canonicalizePath' target
       maybe (failAction absTarget >> return ("", "", "")) (tryBuild' absTarget) =<< findDoFile absTarget
     tryBuild' target doFile = do lckFileName <- createLockFile target 
                                  maybe (return (target, doFile, lckFileName)) (runBuild target doFile) 
@@ -107,7 +107,7 @@ runDoFile target doFile = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  initializeMetaDepsDir target doFile
+  depDir <- initializeMetaDepsDir target doFile
 
   -- Get the last time the target was modified:
   targetModTime <- getTargetModificationTime
@@ -127,10 +127,12 @@ runDoFile target doFile = do
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> moveTempFiles targetModTime
-    ExitFailure code -> if null keepGoing
-                        then redoError code $ nonZeroExitStr code
-                        else putErrorStrLn $ nonZeroExitStr code
+    ExitSuccess -> do moveTempFiles targetModTime
+                      markTargetClean' depDir -- we just built this target, so we know it is clean now
+    ExitFailure code -> do markTargetDirty' depDir -- we failed to build this target, so mark it dirty
+                           if null keepGoing
+                           then redoError code $ nonZeroExitStr code
+                           else putErrorStrLn $ nonZeroExitStr code
   -- Remove the temporary files:
   removeTempFiles target
   where
