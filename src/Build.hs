@@ -128,8 +128,8 @@ runDoFile target doFile = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> do moveTempFiles targetModTime
-                      markTargetClean' depDir -- we just built this target, so we know it is clean now
-    ExitFailure code -> do markTargetDirty' depDir -- we failed to build this target, so mark it dirty
+                      markTargetClean depDir -- we just built this target, so we know it is clean now
+    ExitFailure code -> do markTargetDirty depDir -- we failed to build this target, so mark it dirty
                            if null keepGoing
                            then redoError code $ nonZeroExitStr code
                            else putErrorStrLn $ nonZeroExitStr code

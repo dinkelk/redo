@@ -1,7 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative', canonicalizePath') where
+module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative', canonicalizePath', 
+               safeRemoveGlob, safeRemoveDirectoryRecursive) where
 
+import Control.Monad (guard)
+import Control.Exception (catch, catchJust, SomeException(..))
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
 import Control.Monad (liftM, filterM)
@@ -9,8 +12,10 @@ import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import Debug.Trace (trace)
 import System.FilePath (joinPath, splitDirectories, (</>), takeDirectory, isDrive, takeExtensions, dropExtensions, dropExtension, pathSeparator, splitFileName)
-import System.Directory (setCurrentDirectory, doesFileExist, makeAbsolute, getCurrentDirectory, doesDirectoryExist)
+import System.FilePath.Glob (globDir1, compile)
+import System.Directory (removeDirectoryRecursive, removeFile, setCurrentDirectory, doesFileExist, makeAbsolute, getCurrentDirectory, doesDirectoryExist)
 import System.Exit (exitFailure)
+import System.IO.Error (isDoesNotExistError)
 
 import PrettyPrint
 
@@ -93,3 +98,11 @@ makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then (joinPath $ repli
 -- not a necessary feature for redo, and it just slows us down.
 canonicalizePath' :: FilePath -> IO FilePath
 canonicalizePath' path = removeDotDirs <$> makeAbsolute path
+
+-- Remove files that match a globString, ie. "*.txt"
+safeRemoveGlob :: FilePath -> String -> IO ()
+safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile globString) directory
+  where safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
+
+safeRemoveDirectoryRecursive :: FilePath -> IO ()
+safeRemoveDirectoryRecursive dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive dir) (\_ -> return())
