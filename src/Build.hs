@@ -27,17 +27,21 @@ import Helpers
 
 -- Just run the do file for a 'redo' command:
 redo :: [FilePath] -> IO ()
-redo targets = buildTargets noDoFileError build targets 
+redo targets = buildTargets redo' targets 
+  where redo' target = maybe (noDoFileError target) (build target) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [FilePath] -> IO ()
-redoIfChange targets = buildTargets missingDo redoIfChange' targets
+redoIfChange targets = buildTargets redoIfChange' targets
   where 
-    redoIfChange' target doFile = do 
+    redoIfChange' target = do 
       --putStatusStrLn $ "redo-ifchange " ++ target
-      upToDate' <- upToDate target doFile
+      -- TODO return do file from uptodate
+      upToDate' <- upToDate target
+      doFile <- findDoFile target
       -- Try to run redo if out of date, if it fails, print an error message:
-      unless upToDate' $ build target doFile
+      unless upToDate' $ maybe (missingDo target) (build target) doFile
+    -- TODO: may need to rethink this logic
     missingDo target = do exists <- doesTargetExist target
                           unless exists $ noDoFileError target
 
@@ -49,8 +53,8 @@ redoIfChange targets = buildTargets missingDo redoIfChange' targets
 -- This function allows us to build all the targets that don't have any 
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention
-buildTargets :: (FilePath -> IO ())-> (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()
-buildTargets failAction buildFunc targets = do
+buildTargets :: (FilePath -> IO ()) -> [FilePath] -> IO ()
+buildTargets buildFunc targets = do
   -- Try to lock file and build it, accumulate list of unbuilt files
   remainingTargets <- mapM tryBuild targets 
   -- Wait to acquire the lock, and build the remaining unbuilt files
@@ -59,19 +63,19 @@ buildTargets failAction buildFunc targets = do
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild target = do 
       absTarget <- canonicalizePath' target
-      maybe (failAction absTarget >> return ("", "", "")) (tryBuild' absTarget) =<< findDoFile absTarget
-    tryBuild' target doFile = do lckFileName <- createLockFile target 
-                                 maybe (return (target, doFile, lckFileName)) (runBuild target doFile) 
-                                   =<< tryLockFile lckFileName Exclusive
-    runBuild target doFile lock = do buildFunc target doFile
-                                     unlockFile lock
-                                     return ("", "", "")
+      tryBuild' absTarget
+    tryBuild' target = do lckFileName <- createLockFile target 
+                          maybe (return (target, lckFileName)) (runBuild target) 
+                            =<< tryLockFile lckFileName Exclusive
+    runBuild target lock = do buildFunc target
+                              unlockFile lock
+                              return ("", "")
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (FilePath, FilePath, FilePath) -> IO ()
-    waitBuild ("", "", "") = return ()
-    waitBuild (target, doFile, lckFileName) = do lock <- lockFile lckFileName Exclusive 
-                                                 buildFunc target doFile
-                                                 unlockFile lock
+    waitBuild :: (FilePath, FilePath) -> IO ()
+    waitBuild ("", "") = return ()
+    waitBuild (target, lckFileName) = do lock <- lockFile lckFileName Exclusive 
+                                         buildFunc target
+                                         unlockFile lock
 
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()

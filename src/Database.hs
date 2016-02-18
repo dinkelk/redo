@@ -6,8 +6,7 @@ module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDepen
                 markTargetClean, markTargetDirty) where
 
 import Control.Applicative ((<$>))
-import Control.Monad (guard)
-import Control.Exception (catch, catchJust, SomeException(..))
+import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
@@ -113,18 +112,42 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 
 -- Top upToDate which should be called by redo-ifchange. Return true if a file is clean and does
 -- not need to be built. Return false if a file is dirty and needs to be rebuilt.
+-- Note: target must be the absolute canonicalized path to the target
 -- TODO... jeez can this be cleaned up?
-upToDate :: FilePath -> FilePath -> IO Bool
-upToDate absoluteTarget absoluteDoFile = do
-  depDir <- depFileDir absoluteTarget
-  (ret, builtTarget) <- getBuiltTargetIfUpToDate 0 absoluteTarget depDir 
-  -- Target is not built, so just exit out with the given return code
-  if null builtTarget then return ret
-  -- Target is built, so we need to check the other dependencies
-  else upToDate2' 0 absoluteTarget depDir absoluteDoFile
+upToDate :: FilePath -> IO Bool
+upToDate target = do
+  depDir <- depFileDir target
+  return () `debug'` "=checking"
+  hasMetaDeps <- doesDirectoryExist depDir
+  targetExists <- doesTargetExist target
+  case (targetExists, hasMetaDeps) of 
+    -- If no meta data for this target is stored and it doesn't exist than it has never been built
+    (False, False) -> return False `debug'` "+not built"
+    -- If the target exists on the filesystem but does not have meta deps dir then redo never
+    -- created it. It must be a source file so it is up to date.
+    (True, False) -> return True `debug'` "+source"
+    -- If the meta deps dir exists, then we need to check extra info contained within it to determine
+    -- if the target is up to date:
+    (_, True) -> do
+      dirty <- isTargetMarkedDirty depDir
+      -- If we have already checked off this target as dirty, don't delay, return not up to date
+      if dirty then return False `debug'` "-dirty"
+      else do
+        clean <- isTargetMarkedClean depDir
+        -- If we have already checked off this target as up to date, there is no need to check again
+        if clean then return True `debug'` "+clean"
+        else do 
+          let phonyTarget = phonyFile' depDir
+          phonyTargetExists <- doesFileExist phonyTarget
+          let existingTarget = if targetExists then target
+                               else if phonyTargetExists then phonyTarget else ""
+          -- If neither a target or a phony target exists, then the target is obviously not up to date
+          if null existingTarget then (returnFalse depDir) `debug'` "-not built"
+          else upToDate2 0 target depDir
   where
     -- Convenient debug function:
-    debug'' level target a string = debug a (createSpaces (level*2) ++ string ++ createSpaces paddingToAppend ++ " -- " ++ target)
+    debug' a b = debug'' 0 target a b
+    debug'' depth file a string = debug a (createSpaces (depth*2) ++ string ++ createSpaces paddingToAppend ++ " -- " ++ file)
       where createSpaces num = (concat $ replicate num " ") 
             stringWidth = 12
             paddingToAppend = stringWidth - length string
@@ -132,47 +155,6 @@ upToDate absoluteTarget absoluteDoFile = do
     returnTrue metaDepsDir = markTargetClean metaDepsDir >> return True
     -- Function which returns false and marks the target as dirty:
     returnFalse metaDepsDir = markTargetDirty metaDepsDir >> return False
-    
-    -- This function performs a bunch of checks to see if a target is a source file,
-    -- or is already marked clean or dirty. If all of these checks pass, meaning we
-    -- need to continue checking if the target is up to date, the built target path is
-    -- returned. This might just be the target, or it could be the phony target. If
-    -- a check fails, then "" will be returned as the built target and a return code will
-    -- be passed indicating if the checks failed with a target is "clean" (True) or 
-    -- target is "dirty" (False)
-    -- TODO split this up into mini functions. is built? is source? is dirty? is clean? haveBuiltTarget?
-    getBuiltTargetIfUpToDate :: Int -> FilePath -> FilePath -> IO (Bool, FilePath)
-    getBuiltTargetIfUpToDate level target depDir = do
-      return () `debug'` "=checking"
-      hasMetaDeps <- doesDirectoryExist depDir
-      targetExists <- doesTargetExist target
-      case (targetExists, hasMetaDeps) of 
-        -- If no meta data for this target is stored and it doesn't exist than it has never been built
-        (False, False) -> return (False, "")  `debug'` "+not built"
-        -- If the target exists on the filesystem but does not have meta deps dir then redo never
-        -- created it. It must be a source file so it is up to date.
-        (True, False) -> return (True, "") `debug'` "+source"
-        -- If the meta deps dir exists, then we need to check extra info contained within it to determine
-        -- if the target is up to date:
-        (_, True) -> do
-          dirty <- isTargetMarkedDirty depDir
-          -- If we have already checked off this target as dirty, don't delay, return not up to date
-          if dirty then return (False, "") `debug'` "-dirty"
-          else do
-            clean <- isTargetMarkedClean depDir
-            -- If we have already checked off this target as up to date, there is no need to check again
-            if clean then return (True, "") `debug'` "+clean"
-            else do 
-              let phonyTarget = phonyFile' depDir
-              phonyTargetExists <- doesFileExist phonyTarget
-              let existingTarget = if targetExists then target
-                                   else if phonyTargetExists then phonyTarget else ""
-              -- If neither a target or a phony target exists, then the target is obviously not up to date
-              if null existingTarget then (returnFalse' depDir) `debug'` "-not built"
-              else return (False, existingTarget)
-      where 
-        debug' a b = debug'' level target a b
-        returnFalse' metaDepsDir = markTargetDirty metaDepsDir >> return (False, "")
 
     -- Secondary up to date checks if the first checks fail to be conclusive. This function is
     -- meant to be called when a do file is not known
@@ -183,25 +165,19 @@ upToDate absoluteTarget absoluteDoFile = do
       -- now a newly marked source file. So remove the meta dir but return false to be conservative. 
       -- There is no need to mark the file clean because the meta dir is removed.
       if isNothing doFile then (safeRemoveDirectoryRecursive depDir >> return False) `debug'` "+new source"
-      else upToDate2' level target depDir (fromJust doFile)
-      where 
-        debug' a b = debug'' level target a b
-
-    -- Secondary up to date checks if the first checks fail to be conclusive. This function is
-    -- meant to be called when a do file is already known and is passed in.
-    upToDate2' :: Int -> FilePath -> FilePath -> FilePath -> IO Bool
-    upToDate2' level target depDir absDoFile = do
-      newDo <- newDoFile depDir absDoFile
-      -- If the target exists but a new do file was found for it then we need to rebuilt it, so
-      -- it is not up to date.
-      if newDo then (returnFalse depDir) `debug'` "-new .do"
       else do
-        let doFileDir = takeDirectory absDoFile
-        -- If all of the dependencies are up to date then this target is also up to date, so mark it
-        -- as such and return true. Else, return false.
-        depsClean <- depsUpToDate level target depDir doFileDir 
-        if depsClean then (returnTrue depDir) `debug'` "+deps clean"
-        else (returnFalse depDir) -- `debug'` "-deps dirty "
+        let absDoFile = fromJust doFile
+        newDo <- newDoFile depDir absDoFile
+        -- If the target exists but a new do file was found for it then we need to rebuilt it, so
+        -- it is not up to date.
+        if newDo then (returnFalse depDir) `debug'` "-new .do"
+        else do
+          let doFileDir = takeDirectory absDoFile
+          -- If all of the dependencies are up to date then this target is also up to date, so mark it
+          -- as such and return true. Else, return false.
+          depsClean <- depsUpToDate (level+1) target depDir doFileDir 
+          if depsClean then (returnTrue depDir) -- `debug'` "+deps clean"
+          else (returnFalse depDir) -- `debug'` "-deps dirty "
       where 
         debug' a b = debug'' level target a b
         -- Does the target have a new do file from the last time it was built?
@@ -220,32 +196,16 @@ upToDate absoluteTarget absoluteDoFile = do
     depsUpToDate :: Int -> FilePath -> FilePath -> FilePath ->  IO Bool
     depsUpToDate level target metaDepsDir doFileDir = do
       depHashFiles <- getDirectoryContents metaDepsDir
-      if anyAlwaysDeps depHashFiles then return False `debug` "-dep always "
+      if anyAlwaysDeps depHashFiles then return False `debug'` "-dep always"
       else do 
         -- redo-ifcreate - if one of those files was created, we need to return False immediately
         depCreated' <- mapOr (depCreated . unEscapeIfCreatePath) (ifCreateDeps depHashFiles)
-        if depCreated' then return False `debug` "-dep created"
+        if depCreated' then return False `debug'` "-dep created"
         -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
         --                 then recursively check their dependencies to see if they are up to date
         else mapAnd (ifChangeDepsUpToDate metaDepsDir doFileDir) (ifChangeDeps depHashFiles)
       where 
         debug' a b = debug'' level target a b
-        -- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation
-        -- if a "False" is found. This helps prevent infinite loops if dependencies are circular.
-        mapAnd :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
-        mapAnd _ [] = return True
-        mapAnd func (x:xs) = do boolean <- func x
-                                if boolean then mapAnd func xs
-                                -- Optimization: cut the evaluation short if a single False is found
-                                else return False
-        -- Function which basically does "or `liftM` mapM" but has the optimization of not continuing evaluation
-        -- if a "True" is found.
-        mapOr :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
-        mapOr _ [] = return False
-        mapOr func (x:xs) = do boolean <- func x
-                               -- Optimization: cut the evaluation short if a single True is found
-                               if boolean then return True
-                               else mapOr func xs
         -- Returns true if there are any "-always" dependencies present:
         anyAlwaysDeps = any (fileHasPrepend always_dependency_prepend) 
         -- Functions which filter a set of dependencies for only those made with "-ifchange" or "-ifcreate"
@@ -264,8 +224,6 @@ upToDate absoluteTarget absoluteDoFile = do
           -- compare the hash. Otherwise, we know we are not up to date because the dep 
           -- is missing.
           depDir <- depFileDir dep
-
-          ---
           return () `debug'` "=checking"
           hasMetaDeps <- doesDirectoryExist depDir
           targetExists <- doesTargetExist dep
@@ -274,9 +232,9 @@ upToDate absoluteTarget absoluteDoFile = do
             (False, False) -> return False `debug'` "+not built"
             -- If the target exists on the filesystem but does not have meta deps dir then redo never
             -- created it. It must be a source file so it is up to date.
-            (True, False) -> do hashesMatch <- compareHash'' hashFullPath dep 
-                                if hashesMatch then return True `debug'` "+dep unchanged"
-                                else return False `debug'` "-dep changed"                              
+            (True, False) -> do hashesMatch <- compareHash hashFullPath dep 
+                                if hashesMatch then return True `debug'` "+unchanged"
+                                else return False `debug'` "-changed"                              
             -- If the meta deps dir exists, then we need to check extra info contained within it to determine
             -- if the target is up to date:
             (_, True) -> do
@@ -295,78 +253,20 @@ upToDate absoluteTarget absoluteDoFile = do
                   -- If neither a target or a phony target exists, then the target is obviously not up to date
                   if null existingTarget then (returnFalse depDir) `debug'` "-not built"
                   -- Check the target against it's stored hash
-                  else do hashesMatch <- compareHash'' hashFullPath existingTarget
-                          if hashesMatch then upToDate2 (level+1) dep depDir
+                  else do hashesMatch <- compareHash hashFullPath existingTarget
+                          if hashesMatch then upToDate2 level dep depDir
                           else return False `debug'` "-dep changed"       
-          ---
           where
             debug' a b = debug'' level dep a b
             hashFullPath = depsDir </> hashFile
             dep = doDir </> unEscapeIfChangePath hashFile
             -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
-            compareHash :: FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
-            compareHash hashFullPath depToHash dep depMetaDir = do
-              oldHash <- BS.readFile hashFullPath 
-              newHash <- computeHash depToHash
-              -- If the dependency is not up-to-date, then return false
-              -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-              if oldHash /= newHash then return False `debug'` "-dep changed"
-              -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
-              -- Otherwise, we need to check if the dep itself is up to date, so recurse.
-              else upToDate2 (level+1) dep depMetaDir 
-            -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
-            compareHash' :: FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
-            compareHash' hashFullPath depToHash dep depMetaDir = do
-              oldHash <- BS.readFile hashFullPath 
-              newHash <- computeHash depToHash
-              -- If the dependency is not up-to-date, then return false
-              -- If the dependency is up-to-date then recurse to see if it's dependencies are up-to-date
-              if oldHash /= newHash then return False `debug'` "-dep changed"
-              -- If the target exists, but has no do file to build it, then it is a source file, and is up to date, so return true
-              -- Otherwise, we need to check if the dep itself is up to date, so recurse.
-              else return True `debug'` "+dep unchanged"
-            -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
-            compareHash'' :: FilePath -> FilePath -> IO Bool
-            compareHash'' hashFullPath depToHash = do
-              oldHash <- BS.readFile hashFullPath 
-              newHash <- computeHash depToHash
+            compareHash :: FilePath -> FilePath -> IO Bool
+            compareHash storedHash fileToHash = do
+              oldHash <- BS.readFile storedHash 
+              newHash <- computeHash fileToHash 
               return $ oldHash == newHash
                 
-    --getBuiltTargetIfUpToDate' :: Int -> FilePath -> FilePath -> IO (Bool, FilePath)
-    --getBuiltTargetIfUpToDate' level target depDir = do
-    --  return () `debug'` "=checking"
-    --  hasMetaDeps <- doesDirectoryExist depDir
-    --  targetExists <- doesTargetExist target
-    --  case (targetExists, hasMetaDeps) of 
-    --    -- If no meta data for this target is stored and it doesn't exist than it has never been built
-    --    (False, False) -> return (False, "")  `debug'` "+not built"
-    --    -- If the target exists on the filesystem but does not have meta deps dir then redo never
-    --    -- created it. It must be a source file so it is up to date.
-    --    (True, False) -> (True, target) `debug'` "+source"
-    --                     
-    --    -- If the meta deps dir exists, then we need to check extra info contained within it to determine
-    --    -- if the target is up to date:
-    --    (_, True) -> do
-    --      dirty <- isTargetMarkedDirty depDir
-    --      -- If we have already checked off this target as dirty, don't delay, return not up to date
-    --      if dirty then return (False, "") `debug'` "-dirty"
-    --      else do
-    --        clean <- isTargetMarkedClean depDir
-    --        -- If we have already checked off this target as up to date, there is no need to check again
-    --        if clean then return (True, "") `debug'` "+clean"
-    --        else do 
-    --          let phonyTarget = phonyFile' depDir
-    --          phonyTargetExists <- doesFileExist phonyTarget
-    --          let existingTarget = if targetExists then target
-    --                               else if phonyTargetExists then phonyTarget else ""
-    --          -- If neither a target or a phony target exists, then the target is obviously not up to date
-    --          if null existingTarget then (returnFalse' depDir) `debug'` "-not built"
-    --          else return (False, existingTarget)
-    --  where 
-    --    debug' a b = debug'' level target a b
-    --    returnFalse' metaDepsDir = markTargetDirty metaDepsDir >> return (False, "")
-
-
 -- Missing do error function:
 noDoFileError :: FilePath -> IO()
 noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ target ++ "'"
