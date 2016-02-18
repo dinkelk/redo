@@ -9,7 +9,6 @@ import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
--- import Debug.Trace (traceShow)
 import System.Directory (getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith)
@@ -36,12 +35,9 @@ redoIfChange targets = buildTargets redoIfChange' targets
   where 
     redoIfChange' target = do 
       --putStatusStrLn $ "redo-ifchange " ++ target
-      -- TODO return do file from uptodate
       upToDate' <- upToDate target
-      doFile <- findDoFile target
       -- Try to run redo if out of date, if it fails, print an error message:
-      unless upToDate' $ maybe (missingDo target) (build target) doFile
-    -- TODO: may need to rethink this logic
+      unless upToDate' $ maybe (missingDo target) (build target) =<< findDoFile target
     missingDo target = do exists <- doesTargetExist target
                           unless exists $ noDoFileError target
 
@@ -80,10 +76,7 @@ buildTargets buildFunc targets = do
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()
 build target doFile = do
-  --putStatusStrLn $ "running " ++ doFile ++ " on " ++ target
-  -- TODO clean up
-  let doFileDir = takeDirectory doFile
-  performActionInDir doFileDir (runDoFile target) doFile 
+  performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
