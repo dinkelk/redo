@@ -11,7 +11,7 @@ import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 import System.Directory (getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
-import System.Exit (ExitCode(..), exitWith)
+import System.Exit (ExitCode(..), exitWith, exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
 import System.FilePath (takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
@@ -124,7 +124,7 @@ runDoFile target doFile = do
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> do moveTempFiles targetModTime
+    ExitSuccess -> do moveTempFiles targetModTime depDir
                       markTargetClean depDir -- we just built this target, so we know it is clean now
     ExitFailure code -> do markTargetDirty depDir -- we failed to build this target, so mark it dirty
                            if null keepGoing
@@ -139,7 +139,7 @@ runDoFile target doFile = do
     tmpStdout = tmpStdoutFile target 
     renameFileOrDir old new = catch(renameFile old new) 
       (\(_ :: SomeException) -> catch(renameDirectory old new) (\(_ :: SomeException) -> return ()))
-    moveTempFiles prevTimestamp = do 
+    moveTempFiles prevTimestamp depDir = do 
       tmp3Exists <- doesTargetExist tmp3
       stdoutExists <- doesTargetExist tmpStdout
       if tmp3Exists then
@@ -163,9 +163,9 @@ runDoFile target doFile = do
                       -- no stdout. In this case, lets not clutter the directory, and
                       -- instead store a phony target in the meta directory
                       else do safeRemoveFile target
-                              storePhonyTarget target)
+                              storePhonyTarget depDir)
       -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
-      else storePhonyTarget target
+      else storePhonyTarget depDir 
     getTargetModificationTime :: IO UTCTime
     getTargetModificationTime = do
       targetExists <- doesTargetExist target
@@ -243,3 +243,9 @@ safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
+
+-- Missing do error function:
+noDoFileError :: FilePath -> IO()
+noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ target ++ "'"
+                          exitFailure
+
