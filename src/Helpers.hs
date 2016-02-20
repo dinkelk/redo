@@ -3,11 +3,9 @@
 module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative', canonicalizePath', 
                safeRemoveGlob, safeRemoveDirectoryRecursive, removeDotDirs, mapAnd, mapOr) where
 
-import Control.Monad (guard)
-import Control.Exception (catchJust)
 import Control.Applicative ((<$>),(<*>))
-import Control.Exception (catch, SomeException(..))
-import Control.Monad (liftM, filterM)
+import Control.Exception (catchJust, catch, SomeException(..))
+import Control.Monad (guard, liftM, filterM)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import Debug.Trace (trace)
@@ -71,9 +69,10 @@ removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath
         removeParents' [] [] = []
         removeParents' path [] = path
         removeParents' [] (h:hs) = removeParents' [h] hs
-        removeParents' path (h:hs) = if h == "." then removeParents' path hs
-                                     else if (h == "..") && (last path /= "") then removeParents' (init path) hs
-                                          else removeParents' (path ++ [h]) hs
+        removeParents' path (h : hs)
+          | h == "." = removeParents' path hs
+          | (h == "..") && (last path /= "") = removeParents' (init path) hs
+          | otherwise = removeParents' (path ++ [h]) hs
 
 -- Find the shared root between two paths:
 findCommonRoot :: FilePath -> FilePath -> FilePath
@@ -81,12 +80,12 @@ findCommonRoot filePath1 filePath2 = joinPath $ findCommonRoot' (splitDirectorie
   where findCommonRoot' [] [] = []
         findCommonRoot' _ [] = []
         findCommonRoot' [] _ = []
-        findCommonRoot' (h1:path1) (h2:path2) = if h1 == h2 then [h1] ++ findCommonRoot' path1 path2
+        findCommonRoot' (h1:path1) (h2:path2) = if h1 == h2 then h1 : findCommonRoot' path1 path2
                                                 else []
 
 -- My version of makeRelative which actually works and inserts proper ".." where it can
 makeRelative' :: FilePath -> FilePath -> FilePath
-makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then (joinPath $ replicate numParentDirs "..") </> path2NoRoot
+makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then joinPath (replicate numParentDirs "..") </> path2NoRoot
                                     else filePath2
   where commonRoot = findCommonRoot filePath1 filePath2
         rootSize = length $ splitDirectories commonRoot

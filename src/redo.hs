@@ -120,7 +120,7 @@ mainTop progName targets = do
 
   -- Set a unique session number for this session:
   sessionNumber <- randomRIO (0, 1000000000000::Int)
-  setEnv "REDO_SESSION" (show $ sessionNumber)
+  setEnv "REDO_SESSION" (show sessionNumber)
 
   -- Perform the proper action based on the program name:
   case progName of 
@@ -139,17 +139,16 @@ mainTop progName targets = do
     targets' = if null targets then ["all"] else targets
     -- Filter out targets that are not buildable:
     checkTargets :: [FilePath] -> IO ()
-    checkTargets ts = mapM_ check ts
+    checkTargets = mapM_ check
       where
         check target = do 
           -- If the user is trying to build a source file, then exit with an error
           -- else, continue to run the action on the target
           isSource <- isSourceFile target
-          if isSource then do 
+          when isSource $ do
             putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as a source file. Not redoing."
             putWarningStrLn $ "If you believe '" ++ target ++ "' is buildable, remove it and try again."
             exitFailure
-          else return ()
 
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
     runOutsideDoError :: String -> IO ()
@@ -157,7 +156,7 @@ mainTop progName targets = do
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [FilePath] -> IO()
-mainDo progName targets = do
+mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory

@@ -26,12 +26,12 @@ import Helpers
 
 -- Just run the do file for a 'redo' command:
 redo :: [FilePath] -> IO ()
-redo targets = buildTargets redo' targets 
+redo = buildTargets redo'
   where redo' target = maybe (noDoFileError target) (build target) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [FilePath] -> IO ()
-redoIfChange targets = buildTargets redoIfChange' targets
+redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
       --putStatusStrLn $ "redo-ifchange " ++ target
@@ -75,8 +75,7 @@ buildTargets buildFunc targets = do
 
 -- Run a do file in the do file directory on the given target:
 build :: FilePath -> FilePath -> IO ()
-build target doFile = do
-  performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
+build target doFile = performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
 
 -- Run do file if the target was not modified by the user first.
 runDoFile :: FilePath -> FilePath -> IO () 

@@ -23,6 +23,9 @@ import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSiz
 import PrettyPrint
 import Helpers
 
+-- Type Definitions:
+--data Stamp = BS.ByteString
+
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
 #define seperator_replacement_escape '@'
@@ -44,15 +47,15 @@ import Helpers
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
 -- Directory for storing and fetching data on dependencies of redo targets.
-redoMetaDir :: IO (String)
+redoMetaDir :: IO String
 redoMetaDir = getAppUserDataDirectory "redo"
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
-depFileDir :: FilePath -> IO (FilePath)
+depFileDir :: FilePath -> IO FilePath
 depFileDir target = do
   metaRoot <- redoMetaDir 
   hashedTarget <- hashString target
-  return $ metaRoot </> (pathify hashedTarget)
+  return $ metaRoot </> pathify hashedTarget
   where 
     pathify "" = ""
     pathify string = x </> pathify xs
@@ -60,7 +63,7 @@ depFileDir target = do
 
 -- Create a hash string for a target:
 -- TODO remove canonicalize Path here
-hashString :: FilePath -> IO (FilePath)
+hashString :: FilePath -> IO FilePath
 hashString target = do 
   absPath <- canonicalizePath' target
   return $ hex $ BS.unpack $ hash $ BS.pack absPath
@@ -69,7 +72,7 @@ hashString target = do
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-initializeMetaDepsDir :: FilePath -> FilePath -> IO (FilePath)
+initializeMetaDepsDir :: FilePath -> FilePath -> IO FilePath
 initializeMetaDepsDir target doFile = do
   metaDepsDir <- depFileDir target
   initializeMetaDepsDir' metaDepsDir doFile
@@ -87,7 +90,7 @@ initializeMetaDepsDir' metaDepsDir doFile = do
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 cacheDoFile :: FilePath -> FilePath -> IO ()
-cacheDoFile metaDepsDir absoluteDoFile = writeFile (metaDepsDir </> ".do.do.") absoluteDoFile
+cacheDoFile metaDepsDir = writeFile (metaDepsDir </> ".do.do.")
 
 ---------------------------------------------------------------------
 -- Functions querying the meta directory for a target
@@ -103,7 +106,11 @@ getCachedDoFile metaDepsDir = bool (return Nothing) (readCache doFileCache) =<< 
 -- phony target if it exists, else return Nothing
 getBuiltTargetPath :: FilePath -> IO(Maybe FilePath)
 getBuiltTargetPath target = returnTargetIfExists (returnTargetIfExists (return Nothing) =<< phonyFile target) target
-  where returnTargetIfExists failFunc file = bool (failFunc) (return $ Just file) =<< doesTargetExist file
+  where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
+
+getBuiltTargetPath' :: FilePath -> FilePath -> IO(Maybe FilePath)
+getBuiltTargetPath' metaDepsDir = returnTargetIfExists (returnTargetIfExists (return Nothing) (phonyFile' metaDepsDir))
+  where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
 
 -- Checks if a target file is a buildable target, or if it is a source file
 -- TODO optimize this call
@@ -122,7 +129,7 @@ removeLockFiles = do dir <- redoMetaDir
                      safeRemoveGlob dir ".lck.*.lck."
 
 -- Return the lock file name for a target:
-createLockFile :: FilePath -> IO (FilePath)
+createLockFile :: FilePath -> IO FilePath
 createLockFile target = do dir <- redoMetaDir
                            hashedTarget <- hashString target
                            return $ dir </> ".lck." ++ hashedTarget ++ ".lck."
@@ -159,16 +166,13 @@ upToDate target = do
           cachedTimeStamp <- getTargetBuiltTimeStamp depDir
           currentTimeStamp <- safeGetTargetTimeStamp target
           whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
-            let phonyTarget = phonyFile' depDir
-            phonyTargetExists <- doesFileExist phonyTarget
-            let existingTarget = if targetExists then target
-                                 else if phonyTargetExists then phonyTarget else ""
+            existingTarget <- getBuiltTargetPath' depDir target
             -- If neither a target or a phony target exists, then the target is obviously not up to date
-            if null existingTarget then (returnFalse depDir) `debug'` "-not built"
+            if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
             else upToDate' 0 target depDir)
   where
     -- Convenient debug function:
-    debug' a b = debugUpToDate 0 target a b
+    debug' = debugUpToDate 0 target
     
 upToDate' :: Int -> FilePath -> FilePath -> IO Bool
 upToDate' level target depDir = do
@@ -182,24 +186,23 @@ upToDate' level target depDir = do
     newDo <- newDoFile depDir absDoFile
     -- If the target exists but a new do file was found for it then we need to rebuilt it, so
     -- it is not up to date.
-    if newDo then (returnFalse depDir) `debug'` "-new .do"
+    if newDo then returnFalse depDir `debug'` "-new .do"
     else do
       let doFileDir = takeDirectory absDoFile
       -- If all of the dependencies are up to date then this target is also up to date, so mark it
       -- as such and return true. Else, return false.
       depsClean <- depsUpToDate (level+1) target depDir doFileDir 
-      if depsClean then (returnTrue depDir) -- `debug'` "+deps clean"
-      else (returnFalse depDir) -- `debug'` "-deps dirty "
+      if depsClean then returnTrue depDir -- `debug'` "+deps clean"
+      else returnFalse depDir -- `debug'` "-deps dirty "
   where 
-    debug' a b = debugUpToDate level target a b
+    debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: FilePath -> FilePath -> IO Bool
     newDoFile metaDepsDir doFile =
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
-      if (takeExtension target) == ".do" then return False
-      else do
-        maybe (return True) (pathsNotEqual doFile) =<< getCachedDoFile metaDepsDir
+      if takeExtension target == ".do" then return False
+      else maybe (return True) (pathsNotEqual doFile) =<< getCachedDoFile metaDepsDir
       where pathsNotEqual path1 path2 = if path1 /= path2 then return True else return False
 
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
@@ -217,7 +220,7 @@ depsUpToDate level target metaDepsDir doFileDir = do
     --                 then recursively check their dependencies to see if they are up to date
     else mapAnd (ifChangeDepsUpToDate level metaDepsDir doFileDir) (ifChangeDeps depHashFiles)
   where 
-    debug' a b = debugUpToDate level target a b
+    debug' = debugUpToDate level target
     -- Returns true if there are any "-always" dependencies present:
     anyAlwaysDeps = any (fileHasPrepend always_dependency_prepend) 
     -- Functions which filter a set of dependencies for only those made with "-ifchange" or "-ifcreate"
@@ -228,7 +231,7 @@ depsUpToDate level target metaDepsDir doFileDir = do
     -- Has a dependency been created
     -- TODO: This shouldn't be run if the file already was created, just the first time it was created.
     depCreated :: FilePath -> IO Bool
-    depCreated dep = id <$> doesTargetExist dep 
+    depCreated = doesTargetExist
 
 -- Are a target's redo-ifchange dependencies up to date?
 ifChangeDepsUpToDate :: Int -> FilePath -> FilePath -> FilePath -> IO Bool
@@ -259,18 +262,15 @@ ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
           cachedTimeStamp <- getTargetBuiltTimeStamp depDir
           currentTimeStamp <- safeGetTargetTimeStamp dep
           whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
-          let phonyTarget = phonyFile' depDir
-          phonyTargetExists <- doesFileExist phonyTarget
-          let existingTarget = if targetExists then dep
-                               else if phonyTargetExists then phonyTarget else ""
+          existingTarget <- getBuiltTargetPath' depDir dep
           -- If neither a target or a phony target exists, then the target is obviously not up to date
-          if null existingTarget then (returnFalse depDir) `debug'` "-not built"
+          if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
           -- Check the target against it's stored hash
-          else do hashesMatch <- compareHash hashFullPath existingTarget
+          else do hashesMatch <- compareHash hashFullPath (fromJust existingTarget)
                   if hashesMatch then upToDate' level dep depDir
                   else return False `debug'` "-dep changed")
   where
-    debug' a b = debugUpToDate level dep a b
+    debug' = debugUpToDate level dep
     hashFullPath = parentDepDir </> hashFile
     dep = removeDotDirs $ doDir </> unEscapeIfChangePath hashFile
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
@@ -290,7 +290,7 @@ returnFalse metaDepsDir = markTargetDirty metaDepsDir >> return False
 -- Helper for debugging:
 debugUpToDate :: Int -> FilePath -> c -> String -> c
 debugUpToDate depth file a string = debug a (createSpaces (depth*2) ++ string ++ createSpaces paddingToAppend ++ " -- " ++ file)
-  where createSpaces num = (concat $ replicate num " ") 
+  where createSpaces num = concat $ replicate num " "
         stringWidth = 12
         paddingToAppend = stringWidth - length string
                 
@@ -299,13 +299,14 @@ safeGetTargetTimeStamp target = catch (Just <$> getFileTimeStamp target) (\(_ ::
 
 -- Run an action if the target was not modified outside of redo
 whenTargetNotModified :: Maybe BS.ByteString -> Maybe BS.ByteString -> t -> t -> t
-whenTargetNotModified previousTimeStamp currentTimeStamp failAction action = do
+whenTargetNotModified previousTimeStamp currentTimeStamp failAction action =
   -- Make sure that the user didn't modify the target file outside of redo, we don't want to clobber user changes.
   -- Get the last time the target was built by redo:
   if isNothing previousTimeStamp || 
      isNothing currentTimeStamp || 
      currentTimeStamp == previousTimeStamp then action
   else failAction
+
 ---------------------------------------------------------------------
 -- Functions for marking dependencies as clean or dirty
 ---------------------------------------------------------------------
@@ -336,10 +337,10 @@ getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> BS.readFile (builtFile met
   (\(_ :: SomeException) -> return Nothing)
 
 -- Construct filename for storing clean / dirty in a meta dir.
-cleanFile :: FilePath -> IO (FilePath)
+cleanFile :: FilePath -> IO FilePath
 cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
   where f depDir session = return $ depDir </> ".cln." ++ session  ++ ".cln."
-dirtyFile :: FilePath -> IO (FilePath)
+dirtyFile :: FilePath -> IO FilePath
 dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
   where f depDir session = return $ depDir </> ".drt." ++ session  ++ ".drt."
 
@@ -378,7 +379,7 @@ getFileHashStamp file = hash `liftM` BS.readFile file
 getFileTimeStamp :: FilePath -> IO BS.ByteString
 getFileTimeStamp file = do
   st <- getFileStatus file
-  return $ BS.pack $ (show $ modificationTimeHiRes st) ++ (show $ fileID st) ++ (show $ fileSize st)
+  return $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
@@ -402,24 +403,28 @@ storeIfChangeDependencies = storeDependencies storeIfChangeDep
 storeIfCreateDependencies :: [FilePath] -> IO ()
 storeIfCreateDependencies = storeDependencies storeIfCreateDep
 
--- Store dependency for redo-always:
-storeAlwaysDependency :: IO ()
-storeAlwaysDependency = do 
+-- Return some redo environment vaiables
+getRedoEnv :: IO (FilePath, FilePath)
+getRedoEnv = do
   parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
   parentRedoTarget <- getEnv "REDO_TARGET"
   parentRedoMetaDir <- depFileDir parentRedoTarget
-  performActionInDir parentRedoPath storeAlwaysDep $ parentRedoMetaDir
+  return (parentRedoPath, parentRedoMetaDir)
+
+-- Store dependency for redo-always:
+storeAlwaysDependency :: IO ()
+storeAlwaysDependency = do 
+  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
+  performActionInDir parentRedoPath storeAlwaysDep parentRedoMetaDir
 
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (FilePath -> FilePath -> IO ()) -> [FilePath] -> IO ()  
 storeDependencies storeAction dependencies = do 
-  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- getEnv "REDO_TARGET"
-  parentRedoMetaDir <- depFileDir parentRedoTarget
+  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
   mapM_ (performActionInDir parentRedoPath (storeAction parentRedoMetaDir)) dependenciesRel2Parent
   where
-    makeRelativeToParent :: FilePath -> [FilePath] -> IO ([FilePath])
+    makeRelativeToParent :: FilePath -> [FilePath] -> IO [FilePath]
     makeRelativeToParent parent targets = do
       currentDir <- getCurrentDirectory
       -- Note: All target listed here are relative to the current directory in the .do script. This could
@@ -441,7 +446,7 @@ storePhonyTarget :: FilePath -> IO ()
 storePhonyTarget metaDepsDir = createEmptyDepFile $ phonyFile' metaDepsDir
 
 storeHashFile :: FilePath -> FilePath -> FilePath -> IO ()
-storeHashFile metaDepsDir depName depToHash = (writeDepFile theDepFile) =<< getFileStamp depToHash
+storeHashFile metaDepsDir depName depToHash = writeDepFile theDepFile =<< getFileStamp depToHash
   where theDepFile = ifChangeDepFile metaDepsDir depName
 
 ---------------------------------------------------------------------
@@ -460,7 +465,7 @@ alwaysDepFile' :: FilePath -> FilePath
 alwaysDepFile' depDir = depDir </> file
   where file = "." ++ [always_dependency_prepend] ++ "redo-always" ++ [always_dependency_prepend] ++ "."
 
-phonyFile :: FilePath -> IO (FilePath)
+phonyFile :: FilePath -> IO FilePath
 phonyFile target = do depDir <- depFileDir target 
                       return $ phonyFile' depDir
 phonyFile' :: FilePath -> FilePath
