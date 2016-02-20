@@ -156,13 +156,16 @@ upToDate target = do
         -- If we have already checked off this target as up to date, there is no need to check again
         if clean then return True `debug'` "+clean"
         else do 
-          let phonyTarget = phonyFile' depDir
-          phonyTargetExists <- doesFileExist phonyTarget
-          let existingTarget = if targetExists then target
-                               else if phonyTargetExists then phonyTarget else ""
-          -- If neither a target or a phony target exists, then the target is obviously not up to date
-          if null existingTarget then (returnFalse depDir) `debug'` "-not built"
-          else upToDate' 0 target depDir
+          cachedTimeStamp <- getTargetBuiltTimeStamp depDir
+          currentTimeStamp <- safeGetTargetTimeStamp target
+          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False) (do
+            let phonyTarget = phonyFile' depDir
+            phonyTargetExists <- doesFileExist phonyTarget
+            let existingTarget = if targetExists then target
+                                 else if phonyTargetExists then phonyTarget else ""
+            -- If neither a target or a phony target exists, then the target is obviously not up to date
+            if null existingTarget then (returnFalse depDir) `debug'` "-not built"
+            else upToDate' 0 target depDir)
   where
     -- Convenient debug function:
     debug' a b = debugUpToDate 0 target a b
@@ -229,7 +232,7 @@ depsUpToDate level target metaDepsDir doFileDir = do
 
 -- Are a target's redo-ifchange dependencies up to date?
 ifChangeDepsUpToDate :: Int -> FilePath -> FilePath -> FilePath -> IO Bool
-ifChangeDepsUpToDate level depsDir doDir hashFile = do
+ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
   depDir <- depFileDir dep
   return () `debug'` "=checking"
   hasMetaDeps <- doesDirectoryExist depDir
@@ -253,6 +256,9 @@ ifChangeDepsUpToDate level depsDir doDir hashFile = do
         -- If we have already checked off this target as up to date, there is no need to check again
         if clean then return True `debug'` "+clean"
         else do 
+          cachedTimeStamp <- getTargetBuiltTimeStamp depDir
+          currentTimeStamp <- safeGetTargetTimeStamp dep
+          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False) (do
           let phonyTarget = phonyFile' depDir
           phonyTargetExists <- doesFileExist phonyTarget
           let existingTarget = if targetExists then dep
@@ -262,10 +268,10 @@ ifChangeDepsUpToDate level depsDir doDir hashFile = do
           -- Check the target against it's stored hash
           else do hashesMatch <- compareHash hashFullPath existingTarget
                   if hashesMatch then upToDate' level dep depDir
-                  else return False `debug'` "-dep changed"       
+                  else return False `debug'` "-dep changed")
   where
     debug' a b = debugUpToDate level dep a b
-    hashFullPath = depsDir </> hashFile
+    hashFullPath = parentDepDir </> hashFile
     dep = removeDotDirs $ doDir </> unEscapeIfChangePath hashFile
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
     compareHash :: FilePath -> FilePath -> IO Bool
@@ -288,6 +294,22 @@ debugUpToDate depth file a string = debug a (createSpaces (depth*2) ++ string ++
         stringWidth = 12
         paddingToAppend = stringWidth - length string
                 
+safeGetTargetTimeStamp :: FilePath -> IO (Maybe BS.ByteString)
+safeGetTargetTimeStamp target = catch (Just <$> getFileTimeStamp target) (\(_ :: SomeException) -> return Nothing)
+
+-- Run an action if the target was not modified outside of redo
+whenTargetNotModified :: Maybe BS.ByteString -> Maybe BS.ByteString -> t -> t -> t
+whenTargetNotModified previousTimeStamp currentTimeStamp failAction action = do
+  -- Make sure that the user didn't modify the target file outside of redo, we don't want to clobber user changes.
+  -- Get the last time the target was built by redo:
+  if isNothing previousTimeStamp || 
+     isNothing currentTimeStamp || 
+     currentTimeStamp == previousTimeStamp then action
+  else failAction
+
+
+targetModifiedError target = putWarningStrLn $ "Warning: '" ++ target ++ "' was modified outside of redo. Skipping...\n" ++
+                                               "If you want to rebuild '" ++ target ++ "', remove it and try again."
 ---------------------------------------------------------------------
 -- Functions for marking dependencies as clean or dirty
 ---------------------------------------------------------------------
