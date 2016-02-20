@@ -4,7 +4,7 @@
 module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
                 storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
                 markTargetDirty, markTargetBuilt, getFileTimeStamp, depFileDir, getTargetBuiltTimeStamp, 
-                initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified) where
+                initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified, Stamp) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
@@ -24,7 +24,10 @@ import PrettyPrint
 import Helpers
 
 -- Type Definitions:
---data Stamp = BS.ByteString
+newtype Stamp = Stamp BS.ByteString deriving (Show, Eq)
+unStamp :: Stamp -> BS.ByteString
+unStamp (Stamp s) = s
+
 
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
@@ -276,7 +279,7 @@ ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
     compareHash :: FilePath -> FilePath -> IO Bool
     compareHash storedHash fileToHash = do
-      oldHash <- BS.readFile storedHash 
+      oldHash <- readDepFile storedHash 
       newHash <- getFileStamp fileToHash 
       return $ oldHash == newHash
 
@@ -294,11 +297,11 @@ debugUpToDate depth file a string = debug a (createSpaces (depth*2) ++ string ++
         stringWidth = 12
         paddingToAppend = stringWidth - length string
                 
-safeGetTargetTimeStamp :: FilePath -> IO (Maybe BS.ByteString)
+safeGetTargetTimeStamp :: FilePath -> IO (Maybe Stamp)
 safeGetTargetTimeStamp target = catch (Just <$> getFileTimeStamp target) (\(_ :: SomeException) -> return Nothing)
 
 -- Run an action if the target was not modified outside of redo
-whenTargetNotModified :: Maybe BS.ByteString -> Maybe BS.ByteString -> t -> t -> t
+whenTargetNotModified :: Maybe Stamp -> Maybe Stamp -> t -> t -> t
 whenTargetNotModified previousTimeStamp currentTimeStamp failAction action =
   -- Make sure that the user didn't modify the target file outside of redo, we don't want to clobber user changes.
   -- Get the last time the target was built by redo:
@@ -332,8 +335,8 @@ isTargetMarkedDirty :: FilePath -> IO Bool
 isTargetMarkedDirty metaDepsDir = doesFileExist =<< dirtyFile metaDepsDir
 -- Get the cached timestamp for when a target was last built. Return '.'
 -- if it doesn't exist
-getTargetBuiltTimeStamp :: FilePath -> IO (Maybe BS.ByteString)
-getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> BS.readFile (builtFile metaDepsDir)) 
+getTargetBuiltTimeStamp :: FilePath -> IO (Maybe Stamp)
+getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> readDepFile (builtFile metaDepsDir)) 
   (\(_ :: SomeException) -> return Nothing)
 
 -- Construct filename for storing clean / dirty in a meta dir.
@@ -358,7 +361,7 @@ removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir ".cln.*.cln." >> saf
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
 -- TODO: implement timestamps, also make hash stored as binary
-getFileStamp :: FilePath -> IO BS.ByteString
+getFileStamp :: FilePath -> IO Stamp 
 getFileStamp file = do 
   --isDir <- doesDirectoryExist file
   --if isDir then do
@@ -372,28 +375,32 @@ getFileStamp file = do
   getFileTimeStamp file
 
 -- Hash the file
-getFileHashStamp :: FilePath -> IO BS.ByteString
-getFileHashStamp file = hash `liftM` BS.readFile file
+getFileHashStamp :: FilePath -> IO Stamp
+getFileHashStamp file = Stamp <$> hash `liftM` unStamp <$> readDepFile file
 
 -- Get the file timestamp
-getFileTimeStamp :: FilePath -> IO BS.ByteString
+getFileTimeStamp :: FilePath -> IO Stamp
 getFileTimeStamp file = do
   st <- getFileStatus file
-  return $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
+  return $ Stamp $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
-writeDepFile :: FilePath -> BS.ByteString -> IO ()
+writeDepFile :: FilePath -> Stamp -> IO ()
 writeDepFile file contents = catch
-  ( BS.writeFile file contents )
+  ( BS.writeFile file byteContents )
   (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack contents ++ "' to '" ++ cd </> file ++ "'."
+                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> file ++ "'."
                                exitFailure)
+  where byteContents = unStamp contents
+
+readDepFile :: FilePath -> IO Stamp
+readDepFile file = Stamp <$> BS.readFile file
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate
 -- note may need to make specific one for redoifcreate and redoalways
 createEmptyDepFile :: FilePath -> IO ()
-createEmptyDepFile file = writeDepFile file (BS.singleton '.')
+createEmptyDepFile file = writeDepFile file (Stamp $ BS.singleton '.')
 
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [FilePath] -> IO ()
