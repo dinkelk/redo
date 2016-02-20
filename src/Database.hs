@@ -4,7 +4,7 @@
 module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
                 storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
                 markTargetDirty, markTargetBuilt, getFileTimeStamp, depFileDir, getTargetBuiltTimeStamp, 
-                initializeMetaDepsDir') where
+                initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
@@ -14,7 +14,7 @@ import Crypto.Hash.MD5 (hash)
 import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, fromJust)
-import System.Directory (getModificationTime, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
@@ -158,7 +158,7 @@ upToDate target = do
         else do 
           cachedTimeStamp <- getTargetBuiltTimeStamp depDir
           currentTimeStamp <- safeGetTargetTimeStamp target
-          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False) (do
+          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
             let phonyTarget = phonyFile' depDir
             phonyTargetExists <- doesFileExist phonyTarget
             let existingTarget = if targetExists then target
@@ -258,7 +258,7 @@ ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
         else do 
           cachedTimeStamp <- getTargetBuiltTimeStamp depDir
           currentTimeStamp <- safeGetTargetTimeStamp dep
-          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False) (do
+          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
           let phonyTarget = phonyFile' depDir
           phonyTargetExists <- doesFileExist phonyTarget
           let existingTarget = if targetExists then dep
@@ -306,10 +306,6 @@ whenTargetNotModified previousTimeStamp currentTimeStamp failAction action = do
      isNothing currentTimeStamp || 
      currentTimeStamp == previousTimeStamp then action
   else failAction
-
-
-targetModifiedError target = putWarningStrLn $ "Warning: '" ++ target ++ "' was modified outside of redo. Skipping...\n" ++
-                                               "If you want to rebuild '" ++ target ++ "', remove it and try again."
 ---------------------------------------------------------------------
 -- Functions for marking dependencies as clean or dirty
 ---------------------------------------------------------------------

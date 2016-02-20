@@ -21,8 +21,8 @@ import PrettyPrint
 
 -- Debug helpers:
 debug :: c -> String -> c
---debug = flip trace
-debug a b = a
+debug = flip trace
+--debug a b = a
 
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:
