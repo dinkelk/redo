@@ -5,16 +5,20 @@
 module Build(redo, redoIfChange, makeRelative') where
 
 -- System imports:
+import qualified Data.ByteString.Char8 as BS
+import Control.Applicative ((<$>))
 import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
-import System.Directory (getModificationTime, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
+import Data.Time.Clock.POSIX (POSIXTime, utcTimeToPOSIXSeconds)
+import System.Directory (renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory, doesDirectoryExist)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitWith, exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
 import System.FilePath (takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
+import System.Posix.Files (getFileStatus, modificationTimeHiRes)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
 import Data.Time (UTCTime(..), Day( ModifiedJulianDay ), secondsToDiffTime)
@@ -78,10 +82,33 @@ build :: FilePath -> FilePath -> IO ()
 build target doFile = do
   performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
 
--- Run the do script. Note: this must be run in the do file's directory!:
--- and the absolute target must be passed.
+-- Run an action if the target was not modified outside of redo
+whenTargetNotModified :: Maybe BS.ByteString -> Maybe BS.ByteString -> IO () -> IO () -> IO ()
+whenTargetNotModified previousTimeStamp currentTimeStamp failAction action = do
+  -- Make sure that the user didn't modify the target file outside of redo, we don't want to clobber user changes.
+  -- Get the last time the target was built by redo:
+  if isNothing previousTimeStamp || 
+     isNothing currentTimeStamp || 
+     currentTimeStamp == previousTimeStamp then action
+  else failAction
+
 runDoFile :: FilePath -> FilePath -> IO () 
 runDoFile target doFile = do 
+  metaDir <- depFileDir target
+  cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
+  currentTimeStamp <- getTargetTimeStamp
+  whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp metaDir)
+  where
+    getTargetTimeStamp :: IO (Maybe BS.ByteString)
+    getTargetTimeStamp = catch (Just <$> getFileTimeStamp target) (\(_ :: SomeException) -> return Nothing)
+    targetModifiedError :: IO ()
+    targetModifiedError = putWarningStrLn $ "Warning: '" ++ target ++ "' was modified outside of redo. Skipping...\n" ++
+                                            "If you want to rebuild '" ++ target ++ "', remove it and try again."
+
+-- Run the do script. Note: this must be run in the do file's directory!:
+-- and the absolute target must be passed.
+runDoFile' :: FilePath -> FilePath -> Maybe BS.ByteString -> FilePath -> IO () 
+runDoFile' target doFile currentTimeStamp depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -104,11 +131,8 @@ runDoFile target doFile = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  depDir <- initializeMetaDepsDir target doFile
+  initializeMetaDepsDir' depDir doFile
 
-  -- Get the last time the target was modified:
-  targetModTime <- getTargetModificationTime
-   
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
@@ -124,8 +148,11 @@ runDoFile target doFile = do
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> do moveTempFiles targetModTime depDir
+    ExitSuccess -> do moveTempFiles currentTimeStamp depDir
                       markTargetClean depDir -- we just built this target, so we know it is clean now
+                      -- If the target exists, then mark the target built with its timestamp
+                      targetExists <- doesTargetExist target
+                      when targetExists (markTargetBuilt target depDir)
     ExitFailure code -> do markTargetDirty depDir -- we failed to build this target, so mark it dirty
                            if null keepGoing
                            then redoError code $ nonZeroExitStr code
@@ -137,19 +164,18 @@ runDoFile target doFile = do
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
-    renameFileOrDir old new = catch(renameFile old new) 
-      (\(_ :: SomeException) -> catch(renameDirectory old new) (\(_ :: SomeException) -> return ()))
+    moveTempFiles :: Maybe BS.ByteString -> FilePath -> IO ()
     moveTempFiles prevTimestamp depDir = do 
       tmp3Exists <- doesTargetExist tmp3
       stdoutExists <- doesTargetExist tmpStdout
       if tmp3Exists then
-        whenTargetNotModified prevTimestamp (do
+        whenTargetNotModified prevTimestamp currentTimeStamp dollarOneModifiedError (do
           renameFileOrDir tmp3 target
           when stdoutExists (do
             size <- fileSize tmpStdout
-            when (size > 0) wroteToStdoutError ) )
+            when (size > 0) wroteToStdoutError) )
       else if stdoutExists then
-        whenTargetNotModified prevTimestamp (do
+        whenTargetNotModified prevTimestamp currentTimeStamp dollarOneModifiedError (do
           size <- fileSize tmpStdout
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
           -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
@@ -166,24 +192,15 @@ runDoFile target doFile = do
                               storePhonyTarget depDir)
       -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
       else storePhonyTarget depDir 
-    getTargetModificationTime :: IO UTCTime
-    getTargetModificationTime = do
-      targetExists <- doesTargetExist target
-      if targetExists then getModificationTime target else return $ UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0)
-    whenTargetNotModified :: UTCTime -> IO () -> IO ()
-    whenTargetNotModified prevTimestamp action = do
-        -- Allow user to create a directory directly. This is a special case allowed by python redo, and 
-        -- we will allow it too. It is useful for do files that make a directory and populate it with the same name
-        -- as the do file.
-        dirExist <- doesDirectoryExist target 
-        timestamp <- getTargetModificationTime
-        --putWarningStrLn $ show timestamp ++ " > " ++ show prevTimestamp
-        if not dirExist && timestamp > prevTimestamp then targetModifiedError else action
+      where renameFileOrDir :: FilePath -> FilePath -> IO () 
+            renameFileOrDir old new = catch(renameFile old new) 
+              (\(_ :: SomeException) -> catch(renameDirectory old new) (\(_ :: SomeException) -> storePhonyTarget depDir))
+    
     wroteToStdoutError :: IO ()
     wroteToStdoutError  = redoError 1 $ "Error: '" ++ doFile ++ "' wrote to stdout and created $3.\n" ++
                                         "You should write status messages to stderr, not stdout." 
-    targetModifiedError :: IO ()
-    targetModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ target ++ "' directly.\n" ++
+    dollarOneModifiedError :: IO ()
+    dollarOneModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ target ++ "' directly.\n" ++
                                         "You should update $3 (the temporary file) or stdout, not $1." 
     redoError :: Int -> String -> IO ()
     redoError code message = do putErrorStrLn message
@@ -249,3 +266,8 @@ noDoFileError :: FilePath -> IO()
 noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ target ++ "'"
                           exitFailure
 
+-- Get the hi resolution modification time (if the file system supports it)
+getModificationTime :: FilePath -> IO POSIXTime
+getModificationTime file = do 
+  st <- getFileStatus file
+  return $ modificationTimeHiRes st

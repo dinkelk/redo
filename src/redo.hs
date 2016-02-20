@@ -95,7 +95,7 @@ main = do
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
   -- Create a the meta directory if it doesn't exist yet:
-  metaRootDir <- metaDir
+  metaRootDir <- redoMetaDir
   createDirectoryIfMissing True metaRootDir
 
   -- Run the main:

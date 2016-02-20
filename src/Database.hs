@@ -1,18 +1,20 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database(metaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
-                storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, 
-                markTargetClean, markTargetDirty) where
+module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
+                storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
+                markTargetDirty, markTargetBuilt, getFileTimeStamp, depFileDir, getTargetBuiltTimeStamp, 
+                initializeMetaDepsDir') where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
+import Control.Monad (liftM)
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, fromJust)
-import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getModificationTime, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
@@ -42,13 +44,13 @@ import Helpers
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
 -- Directory for storing and fetching data on dependencies of redo targets.
-metaDir :: IO (String)
-metaDir = getAppUserDataDirectory "redo"
+redoMetaDir :: IO (String)
+redoMetaDir = getAppUserDataDirectory "redo"
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
 depFileDir :: FilePath -> IO (FilePath)
 depFileDir target = do
-  metaRoot <- metaDir 
+  metaRoot <- redoMetaDir 
   hashedTarget <- hashString target
   return $ metaRoot </> (pathify hashedTarget)
   where 
@@ -68,16 +70,20 @@ hashString target = do
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
 initializeMetaDepsDir :: FilePath -> FilePath -> IO (FilePath)
-initializeMetaDepsDir target doFile = initDir =<< depFileDir target
-  where initDir metaDepsDir = do
-          safeRemoveDirectoryRecursive metaDepsDir
-          createDirectoryIfMissing True metaDepsDir 
-          -- Write out .do script as dependency:
-          storeHashFile metaDepsDir doFile doFile
-          -- Cache the do file:
-          cacheDoFile metaDepsDir doFile
-          --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
-          return metaDepsDir
+initializeMetaDepsDir target doFile = do
+  metaDepsDir <- depFileDir target
+  initializeMetaDepsDir' metaDepsDir doFile
+  return metaDepsDir
+
+initializeMetaDepsDir' :: FilePath -> FilePath -> IO ()
+initializeMetaDepsDir' metaDepsDir doFile = do
+  safeRemoveDirectoryRecursive metaDepsDir
+  createDirectoryIfMissing True metaDepsDir 
+  -- Write out .do script as dependency:
+  storeHashFile metaDepsDir doFile doFile
+  -- Cache the do file:
+  cacheDoFile metaDepsDir doFile
+  --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 cacheDoFile :: FilePath -> FilePath -> IO ()
@@ -112,12 +118,12 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 -- Functions for creating and destroying lock files
 ---------------------------------------------------------------------
 removeLockFiles :: IO ()
-removeLockFiles = do dir <- metaDir
+removeLockFiles = do dir <- redoMetaDir 
                      safeRemoveGlob dir ".lck.*.lck."
 
 -- Return the lock file name for a target:
 createLockFile :: FilePath -> IO (FilePath)
-createLockFile target = do dir <- metaDir
+createLockFile target = do dir <- redoMetaDir
                            hashedTarget <- hashString target
                            return $ dir </> ".lck." ++ hashedTarget ++ ".lck."
                            
@@ -265,7 +271,7 @@ ifChangeDepsUpToDate level depsDir doDir hashFile = do
     compareHash :: FilePath -> FilePath -> IO Bool
     compareHash storedHash fileToHash = do
       oldHash <- BS.readFile storedHash 
-      newHash <- computeHash fileToHash 
+      newHash <- getFileStamp fileToHash 
       return $ oldHash == newHash
 
 -- Helper function which returns true and marks the target as clean:
@@ -295,12 +301,21 @@ markTargetDirty :: FilePath -> IO ()
 markTargetDirty metaDepsDir = do
   removeSessionFiles metaDepsDir
   createEmptyDepFile =<< dirtyFile metaDepsDir
+markTargetBuilt :: FilePath -> FilePath -> IO ()
+markTargetBuilt target metaDepsDir = do
+  timestamp <- getFileTimeStamp target
+  writeDepFile (builtFile metaDepsDir) timestamp
 
 -- Check for stored clean or dirty files in a meta dir.
 isTargetMarkedClean :: FilePath -> IO Bool 
 isTargetMarkedClean metaDepsDir = doesFileExist =<< cleanFile metaDepsDir
 isTargetMarkedDirty :: FilePath -> IO Bool 
 isTargetMarkedDirty metaDepsDir = doesFileExist =<< dirtyFile metaDepsDir
+-- Get the cached timestamp for when a target was last built. Return '.'
+-- if it doesn't exist
+getTargetBuiltTimeStamp :: FilePath -> IO (Maybe BS.ByteString)
+getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> BS.readFile (builtFile metaDepsDir)) 
+  (\(_ :: SomeException) -> return Nothing)
 
 -- Construct filename for storing clean / dirty in a meta dir.
 cleanFile :: FilePath -> IO (FilePath)
@@ -309,6 +324,10 @@ cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
 dirtyFile :: FilePath -> IO (FilePath)
 dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
   where f depDir session = return $ depDir </> ".drt." ++ session  ++ ".drt."
+
+-- Construct file for storing built timestamp
+builtFile :: FilePath -> FilePath
+builtFile metaDepsDir = metaDepsDir </> ".blt.blt."
 
 -- Remove dirty and clean files in a meta dir.
 removeSessionFiles :: FilePath -> IO ()
@@ -320,8 +339,8 @@ removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir ".cln.*.cln." >> saf
 -- Calculate the hash of a file. If the file is a directory,
 -- then return the timestamp instead.
 -- TODO: implement timestamps, also make hash stored as binary
-computeHash :: FilePath -> IO BS.ByteString
-computeHash file = do 
+getFileStamp :: FilePath -> IO BS.ByteString
+getFileStamp file = do 
   --isDir <- doesDirectoryExist file
   --if isDir then do
   --  timestamp <- getModificationTime file
@@ -331,6 +350,15 @@ computeHash file = do
   --  return $ BS.pack $ show timestamp
      -- hash `liftM` BS.readFile file
   --------------------------------------------
+  getFileTimeStamp file
+
+-- Hash the file
+getFileHashStamp :: FilePath -> IO BS.ByteString
+getFileHashStamp file = hash `liftM` BS.readFile file
+
+-- Get the file timestamp
+getFileTimeStamp :: FilePath -> IO BS.ByteString
+getFileTimeStamp file = do
   st <- getFileStatus file
   return $ BS.pack $ (show $ modificationTimeHiRes st) ++ (show $ fileID st) ++ (show $ fileSize st)
 
@@ -391,11 +419,11 @@ storeIfCreateDep metaDepsDir dep = createEmptyDepFile $ ifCreateDepFile metaDeps
 storeAlwaysDep :: FilePath -> IO ()
 storeAlwaysDep metaDepsDir = createEmptyDepFile $ alwaysDepFile' metaDepsDir
 
-storePhonyTarget :: FilePath -> IO ()
+storePhonyTarget :: FilePath -> IO () 
 storePhonyTarget metaDepsDir = createEmptyDepFile $ phonyFile' metaDepsDir
 
 storeHashFile :: FilePath -> FilePath -> FilePath -> IO ()
-storeHashFile metaDepsDir depName depToHash = (writeDepFile theDepFile) =<< computeHash depToHash
+storeHashFile metaDepsDir depName depToHash = (writeDepFile theDepFile) =<< getFileStamp depToHash
   where theDepFile = ifChangeDepFile metaDepsDir depName
 
 ---------------------------------------------------------------------
