@@ -476,12 +476,12 @@ storeDependencies storeAction dependencies = do
 -- TODO: do we still need this?
 performActionInDir :: FilePath -> (t -> IO ()) -> t -> IO ()
 performActionInDir dir action target = do
-  topDir <- getCurrentDirectory
-  catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-    exitFailure)
+  --topDir <- getCurrentDirectory
+  --catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
+  --  putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
+  --  exitFailure)
   action target
-  setCurrentDirectory topDir
+  --setCurrentDirectory topDir
 
 -- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
 -- because the target still depenends on this target, it just failed to built last time, so we store a

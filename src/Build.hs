@@ -10,7 +10,7 @@ import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe, isJust)
-import System.Directory (setCurrentDirectory, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory)
+import System.Directory (doesDirectoryExist, setCurrentDirectory, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
@@ -56,8 +56,9 @@ redoIfChange = buildTargets redoIfChange'
 -- the files under lock contention
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
-  keepGoing' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
-  let keepGoing = isJust keepGoing'
+  keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
+  let keepGoing' = fromMaybe "" keepGoing''
+  let keepGoing = not $ null keepGoing'
   -- Try to lock file and build it, accumulate list of unbuilt files
   remainingTargets <- mapM' keepGoing tryBuild targets 
   -- Wait to acquire the lock, and build the remaining unbuilt files
@@ -85,29 +86,28 @@ buildTargets buildFunc targets = do
                                             return exitCode
     -- Special mapM which exits early if an operation fails
     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
-    mapM' = mapM'' ExitSuccess
+    mapM' keepGoing f list = mapM'' ExitSuccess list
       where 
-        mapM'' :: ExitCode -> Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
-        mapM'' exitCode _ _ [] = return [(Target "", LockFile "", exitCode)]
-        mapM'' exitCode keepGoing f (x:xs) = do 
+        mapM'' exitCode [] = return [(Target "", LockFile "", exitCode)]
+        mapM'' exitCode (x:xs) = do 
           (a, b, newExitCode) <- f x 
           if newExitCode /= ExitSuccess then 
             if keepGoing then runNext newExitCode (a, b, newExitCode)
             else return [(a, b, newExitCode)]
           else runNext exitCode (a, b, newExitCode)
-          where runNext code current = do next <- mapM'' code keepGoing f xs
+          where runNext code current = do next <- mapM'' code xs
                                           return $ current : next
     -- Special mapM_ which exits early if an operation fails
     mapM_' :: Bool -> ((Target, LockFile, ExitCode) -> IO ExitCode) -> [(Target, LockFile, ExitCode)] -> IO ExitCode
-    mapM_' = mapM_'' ExitSuccess
+    mapM_' keepGoing f list = mapM_'' ExitSuccess list
       where 
-        mapM_'' exitCode _ _ [] = return exitCode
-        mapM_'' exitCode keepGoing f (x:xs) = do 
+        mapM_'' exitCode [] = return exitCode
+        mapM_'' exitCode (x:xs) = do 
           newExitCode <- f x 
           if newExitCode /= ExitSuccess then 
-            if keepGoing then mapM_'' newExitCode keepGoing f xs
+            if keepGoing then mapM_'' newExitCode xs
             else return newExitCode
-          else mapM_'' exitCode keepGoing f xs
+          else mapM_'' exitCode xs
 
 -- Run a do file in the do file directory on the given target:
 build :: Target -> DoFile -> IO ExitCode
@@ -199,15 +199,16 @@ runDoFile' target doFile currentTimeStamp depDir = do
     moveTempFiles = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
+      targetIsDirectory <- doesDirectoryExist $ unTarget target
       newTimeStamp <- safeGetTargetTimeStamp target
       if tmp3Exists then
-        if currentTimeStamp /= newTimeStamp then dollarOneModifiedError 
+        if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
         else do
           renameFileOrDir tmp3 target
           size <- fileSize tmpStdout
           if stdoutExists && size > 0 then wroteToStdoutError else return ExitSuccess
       else if stdoutExists then
-        if currentTimeStamp /= newTimeStamp then dollarOneModifiedError 
+        if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
         else do
           size <- fileSize tmpStdout
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
