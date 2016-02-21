@@ -3,9 +3,9 @@
 
 module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
                 storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
-                markTargetDirty, markTargetBuilt, getTargetTimeStamp, depFileDir, getTargetBuiltTimeStamp, findDoFile,
+                markTargetDirty, markTargetBuilt, getTargetTimeStamp, metaFileDir, getTargetBuiltTimeStamp, findDoFile,
                 initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified, Stamp, Target(..), DoFile(..),
-                DepDir(..), doesTargetExist, performActionInDir) where
+                MetaDir(..), LockFile(..), doesTargetExist, performActionInDir) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catchJust, catch, SomeException(..))
@@ -32,8 +32,10 @@ newtype Stamp = Stamp { unStamp :: BS.ByteString } deriving (Show, Eq)
 --unStamp (Stamp s) = s
 newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Eq)
 newtype Target = Target { unTarget :: FilePath } deriving (Eq)
-newtype DepDir = DepDir { unDepDir :: FilePath } deriving (Eq)
-newtype DatabaseEntry target dofile depdir = DatabaseEntry (Target, DoFile, DepDir)
+newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq)
+newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq)
+newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq)
+newtype DatabaseEntry target dofile depdir = DatabaseEntry (Target, DoFile, MetaDir)
 
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
@@ -60,11 +62,11 @@ redoMetaDir :: IO FilePath
 redoMetaDir = getAppUserDataDirectory "redo"
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
-depFileDir :: Target -> IO DepDir
-depFileDir target = do
+metaFileDir :: Target -> IO MetaDir
+metaFileDir target = do
   metaRoot <- redoMetaDir 
   hashedTarget <- hashString target
-  return $ DepDir $ metaRoot </> pathify hashedTarget
+  return $ MetaDir $ metaRoot </> pathify hashedTarget
   where 
     pathify "" = ""
     pathify string = x </> pathify xs
@@ -81,16 +83,16 @@ hashString target = do
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-initializeMetaDepsDir :: Target -> DoFile -> IO DepDir
+initializeMetaDepsDir :: Target -> DoFile -> IO MetaDir
 initializeMetaDepsDir target doFile = do
-  metaDepsDir <- depFileDir target
+  metaDepsDir <- metaFileDir target
   initializeMetaDepsDir' metaDepsDir doFile
   return metaDepsDir
 
-initializeMetaDepsDir' :: DepDir -> DoFile -> IO ()
+initializeMetaDepsDir' :: MetaDir -> DoFile -> IO ()
 initializeMetaDepsDir' metaDepsDir doFile = do
-  removeDepDir metaDepsDir
-  createDepDir metaDepsDir
+  removeMetaDir metaDepsDir
+  createMetaDir metaDepsDir
   -- Write out .do script as dependency:
   storeHashFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
   -- Cache the do file:
@@ -98,39 +100,32 @@ initializeMetaDepsDir' metaDepsDir doFile = do
   --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
-cacheDoFile :: DepDir -> DoFile -> IO ()
-cacheDoFile metaDepsDir doFile = writeFile (doFileCache metaDepsDir) (unDoFile doFile)
+cacheDoFile :: MetaDir -> DoFile -> IO ()
+cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir) (unDoFile doFile)
 
 ---------------------------------------------------------------------
 -- Functions querying the meta directory for a target
 ---------------------------------------------------------------------
 -- Retrieve the cached do file path inside meta dir
 -- TODO use catch here instead of doesFileExist
-getCachedDoFile :: DepDir -> IO (Maybe DoFile)
+getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
 getCachedDoFile metaDepsDir = bool (return Nothing) (readCache cache) =<< doesFileExist cache 
   where readCache cachedDo = do doFile <- readFile cachedDo
                                 return $ Just $ DoFile doFile
-        cache = doFileCache metaDepsDir
+        cache = unMetaFile $ doFileCache metaDepsDir
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing
 getBuiltTargetPath :: Target -> IO(Maybe Target)
-getBuiltTargetPath target = returnTargetIfExists (returnTargetIfExists (return Nothing) =<< phonyFile target) target
+getBuiltTargetPath target = returnTargetIfExists (returnPhonyIfExists (return Nothing) =<< phonyFile target) target
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
+        returnPhonyIfExists failFunc file = bool failFunc (return $ Just $ Target $ unMetaFile file) =<< doesMetaFileExist file
 
-getBuiltTargetPath' :: DepDir -> Target -> IO(Maybe Target)
-getBuiltTargetPath' metaDepsDir = returnTargetIfExists (returnTargetIfExists (return Nothing) (phonyFile' metaDepsDir))
+getBuiltTargetPath' :: MetaDir -> Target -> IO(Maybe Target)
+getBuiltTargetPath' metaDepsDir = returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyFile' metaDepsDir))
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
+        returnPhonyIfExists failFunc file = bool failFunc (return $ Just $ Target $ unMetaFile file) =<< doesMetaFileExist file
 
--- Checks if a target file is a buildable target, or if it is a source file
--- TODO optimize this call
-isSourceFile :: Target -> IO Bool
-isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< doesTargetExist target
-  where
-    -- Check's if a target has dependencies stored already
-    hasDependencies :: Target -> IO Bool
-    hasDependencies t = doesDepDirExist =<< depFileDir t
-  
 ---------------------------------------------------------------------
 -- Functions for creating and destroying lock files
 ---------------------------------------------------------------------
@@ -139,10 +134,10 @@ removeLockFiles = do dir <- redoMetaDir
                      safeRemoveGlob dir ".lck.*.lck."
 
 -- Return the lock file name for a target:
-createLockFile :: Target -> IO FilePath
+createLockFile :: Target -> IO LockFile
 createLockFile target = do dir <- redoMetaDir
                            hashedTarget <- hashString target
-                           return $ dir </> ".lck." ++ hashedTarget ++ ".lck."
+                           return $ LockFile $ dir </> ".lck." ++ hashedTarget ++ ".lck."
                            
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
@@ -152,9 +147,9 @@ createLockFile target = do dir <- redoMetaDir
 -- Note: target must be the absolute canonicalized path to the target
 upToDate :: Target -> IO Bool
 upToDate target = do
-  depDir <- depFileDir target
+  depDir <- metaFileDir target
   return () `debug'` "=checking"
-  hasMetaDeps <- doesDepDirExist depDir
+  hasMetaDeps <- doesMetaDirExist depDir
   targetExists <- doesTargetExist target
   case (targetExists, hasMetaDeps) of 
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
@@ -184,13 +179,13 @@ upToDate target = do
     -- Convenient debug function:
     debug' = debugUpToDate 0 target
     
-upToDate' :: Int -> Target -> DepDir -> IO Bool
+upToDate' :: Int -> Target -> MetaDir -> IO Bool
 upToDate' level target depDir = do
   doFile <- findDoFile target
   -- If no do file is found, but the meta dir exists, than this file used to be buildable, but is
   -- now a newly marked source file. So remove the meta dir but return false to be conservative. 
   -- There is no need to mark the file clean because the meta dir is removed.
-  if isNothing doFile then (removeDepDir depDir >> return False) `debug'` "+new source"
+  if isNothing doFile then (removeMetaDir depDir >> return False) `debug'` "+new source"
   else do
     let absDoFile = fromJust doFile
     newDo <- newDoFile depDir absDoFile
@@ -207,7 +202,7 @@ upToDate' level target depDir = do
   where 
     debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
-    newDoFile :: DepDir -> DoFile -> IO Bool
+    newDoFile :: MetaDir -> DoFile -> IO Bool
     newDoFile metaDepsDir doFile =
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
@@ -218,13 +213,13 @@ upToDate' level target depDir = do
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
-depsUpToDate :: Int -> Target -> DepDir -> FilePath ->  IO Bool
+depsUpToDate :: Int -> Target -> MetaDir -> FilePath ->  IO Bool
 depsUpToDate level target metaDepsDir doFileDir = do
-  depHashFiles <- getDepDirContents metaDepsDir
+  depHashFiles <- getMetaDirContents metaDepsDir
   if anyAlwaysDeps depHashFiles then return False `debug'` "-dep always"
   else do 
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
-    depCreated' <- mapOr (depCreated . Target . unEscapeIfCreatePath) (ifCreateDeps depHashFiles)
+    depCreated' <- mapOr (depCreated . Target . unEscapeIfCreatePath . unMetaFile) (ifCreateDeps depHashFiles)
     if depCreated' then return False `debug'` "-dep created"
     -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
     --                 then recursively check their dependencies to see if they are up to date
@@ -237,18 +232,18 @@ depsUpToDate level target metaDepsDir doFileDir = do
     ifChangeDeps = filter (fileHasPrepend ifchange_dependency_prepend)
     ifCreateDeps = filter (fileHasPrepend ifcreate_dependency_prepend)
     -- Check if dep file begins with certain prepend string
-    fileHasPrepend depPrepend xs = take 2 xs == ['.'] ++ [depPrepend]
+    fileHasPrepend depPrepend metaFile = take 2 (unMetaFile metaFile) == ['.'] ++ [depPrepend]
     -- Has a dependency been created
     -- TODO: This shouldn't be run if the file already was created, just the first time it was created.
     depCreated :: Target -> IO Bool
     depCreated = doesTargetExist
 
 -- Are a target's redo-ifchange dependencies up to date?
-ifChangeDepsUpToDate :: Int -> DepDir -> FilePath -> FilePath -> IO Bool
-ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
-  depDir <- depFileDir dep
+ifChangeDepsUpToDate :: Int -> MetaDir -> FilePath -> MetaFile -> IO Bool
+ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
+  depDir <- metaFileDir dep
   return () `debug'` "=checking"
-  hasMetaDeps <- doesDepDirExist depDir
+  hasMetaDeps <- doesMetaDirExist depDir
   targetExists <- doesTargetExist dep
   case (targetExists, hasMetaDeps) of 
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
@@ -281,20 +276,21 @@ ifChangeDepsUpToDate level parentDepDir doDir hashFile = do
                   else return False `debug'` "-dep changed")
   where
     debug' = debugUpToDate level dep
-    hashFullPath = unDepDir parentDepDir </> hashFile
-    dep = Target $ removeDotDirs $ doDir </> unEscapeIfChangePath hashFile
+    hashFilePath = unMetaFile hashFile
+    hashFullPath = MetaFile $ unMetaDir parentMetaDir </> hashFilePath
+    dep = Target $ removeDotDirs $ doDir </> unEscapeIfChangePath hashFilePath
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
-    compareHash :: FilePath -> Target -> IO Bool
+    compareHash :: MetaFile -> Target -> IO Bool
     compareHash storedHash fileToHash = do
-      oldHash <- readDepFile storedHash 
+      oldHash <- readMetaFile storedHash 
       newHash <- getTargetStamp fileToHash 
       return $ oldHash == newHash
 
 -- Helper function which returns true and marks the target as clean:
-returnTrue :: DepDir -> IO Bool
+returnTrue :: MetaDir -> IO Bool
 returnTrue metaDepsDir = markTargetClean metaDepsDir >> return True
 -- Helper function which returns false and marks the target as dirty:
-returnFalse :: DepDir -> IO Bool
+returnFalse :: MetaDir -> IO Bool
 returnFalse metaDepsDir = markTargetDirty metaDepsDir >> return False
 
 -- Helper for debugging:
@@ -347,41 +343,41 @@ findDoFile absTarget = do
 ---------------------------------------------------------------------
 -- Store a file to signify that this file has been checked, and is up
 -- to date or not up to date for this session.
-markTargetClean :: DepDir -> IO ()
+markTargetClean :: MetaDir -> IO ()
 markTargetClean metaDepsDir = do
   removeSessionFiles metaDepsDir
-  createEmptyDepFile =<< cleanFile metaDepsDir
-markTargetDirty :: DepDir -> IO ()
+  createEmptyMetaFile =<< cleanFile metaDepsDir
+markTargetDirty :: MetaDir -> IO ()
 markTargetDirty metaDepsDir = do
   removeSessionFiles metaDepsDir
-  createEmptyDepFile =<< dirtyFile metaDepsDir
-markTargetBuilt :: Target -> DepDir -> IO ()
+  createEmptyMetaFile =<< dirtyFile metaDepsDir
+markTargetBuilt :: Target -> MetaDir -> IO ()
 markTargetBuilt target metaDepsDir = do
   timestamp <- getTargetTimeStamp target
-  writeDepFile (builtFile metaDepsDir) timestamp
+  writeMetaFile (builtFile metaDepsDir) timestamp
 
 -- Check for stored clean or dirty files in a meta dir.
-isTargetMarkedClean :: DepDir -> IO Bool 
-isTargetMarkedClean metaDepsDir = doesFileExist =<< cleanFile metaDepsDir
-isTargetMarkedDirty :: DepDir -> IO Bool 
-isTargetMarkedDirty metaDepsDir = doesFileExist =<< dirtyFile metaDepsDir
+isTargetMarkedClean :: MetaDir -> IO Bool 
+isTargetMarkedClean metaDepsDir = doesMetaFileExist =<< cleanFile metaDepsDir
+isTargetMarkedDirty :: MetaDir -> IO Bool 
+isTargetMarkedDirty metaDepsDir = doesMetaFileExist =<< dirtyFile metaDepsDir
 
 -- Construct filename for storing clean / dirty in a meta dir.
-cleanFile :: DepDir -> IO FilePath
+cleanFile :: MetaDir -> IO MetaFile  
 cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
-  where f depDir session = return $ unDepDir depDir </> ".cln." ++ session  ++ ".cln."
-dirtyFile :: DepDir -> IO FilePath
+  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".cln." ++ session  ++ ".cln."
+dirtyFile :: MetaDir -> IO MetaFile 
 dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
-  where f depDir session = return $ unDepDir depDir </> ".drt." ++ session  ++ ".drt."
+  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".drt." ++ session  ++ ".drt."
 
 -- Construct file for storing built timestamp
-builtFile :: DepDir -> FilePath
-builtFile metaDepsDir = unDepDir metaDepsDir </> ".blt.blt."
+builtFile :: MetaDir -> MetaFile  
+builtFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".blt.blt."
 
 -- Remove dirty and clean files in a meta dir.
-removeSessionFiles :: DepDir -> IO ()
+removeSessionFiles :: MetaDir -> IO ()
 removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir' ".cln.*.cln." >> safeRemoveGlob metaDepsDir' ".drt.*.drt." 
-  where metaDepsDir' = unDepDir metaDepsDir
+  where metaDepsDir' = unMetaDir metaDepsDir
 
 ---------------------------------------------------------------------
 -- Functions writing dependency files
@@ -403,8 +399,9 @@ getTargetStamp file = do
   getTargetTimeStamp file
 
 -- Hash the file
-getTargetHashStamp :: Target -> IO Stamp
-getTargetHashStamp file = Stamp <$> hash `liftM` unStamp <$> readDepFile (unTarget file)
+-- FIXME
+-- getTargetHashStamp :: Target -> IO Stamp
+-- getTargetHashStamp file = Stamp <$> hash `liftM` unStamp <$> readMetaFile (unTarget file)
 
 -- Get the file timestamp
 getTargetTimeStamp :: Target -> IO Stamp
@@ -413,27 +410,28 @@ getTargetTimeStamp file = do
   return $ Stamp $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
 
 -- Get the cached timestamp for when a target was last built. Return '.'
-getTargetBuiltTimeStamp :: DepDir -> IO (Maybe Stamp)
-getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> readDepFile (builtFile metaDepsDir)) 
+getTargetBuiltTimeStamp :: MetaDir -> IO (Maybe Stamp)
+getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> readMetaFile (builtFile metaDepsDir)) 
   (\(_ :: SomeException) -> return Nothing)
 
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
-writeDepFile :: FilePath -> Stamp -> IO ()
-writeDepFile file contents = catch
-  ( BS.writeFile file byteContents )
+writeMetaFile :: MetaFile -> Stamp -> IO ()
+writeMetaFile file contents = catch
+  ( BS.writeFile fileToWrite byteContents )
   (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> file ++ "'."
+                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
                                exitFailure)
   where byteContents = unStamp contents
+        fileToWrite = unMetaFile file
 
-readDepFile :: FilePath -> IO Stamp
-readDepFile file = Stamp <$> BS.readFile file
+readMetaFile :: MetaFile -> IO Stamp
+readMetaFile file = Stamp <$> BS.readFile (unMetaFile file)
 
 -- Creation of an empty dep file for redo-always and redo-ifcreate
 -- note may need to make specific one for redoifcreate and redoalways
-createEmptyDepFile :: FilePath -> IO ()
-createEmptyDepFile file = writeDepFile file (Stamp $ BS.singleton '.')
+createEmptyMetaFile :: MetaFile -> IO ()
+createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
 
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [Target] -> IO ()
@@ -444,11 +442,11 @@ storeIfCreateDependencies :: [Target] -> IO ()
 storeIfCreateDependencies = storeDependencies storeIfCreateDep
 
 -- Return some redo environment vaiables
-getRedoEnv :: IO (FilePath, DepDir)
+getRedoEnv :: IO (FilePath, MetaDir)
 getRedoEnv = do
   parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
   parentRedoTarget <- getEnv "REDO_TARGET"
-  parentRedoMetaDir <- depFileDir $ Target parentRedoTarget
+  parentRedoMetaDir <- metaFileDir $ Target parentRedoTarget
   return (parentRedoPath, parentRedoMetaDir)
 
 -- Store dependency for redo-always:
@@ -458,7 +456,7 @@ storeAlwaysDependency = do
   performActionInDir parentRedoPath storeAlwaysDep parentRedoMetaDir
 
 -- Store dependencies given a store action and a list of dependencies to store:
-storeDependencies :: (DepDir -> Target -> IO ()) -> [Target] -> IO ()  
+storeDependencies :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
   (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
@@ -484,46 +482,46 @@ performActionInDir dir action target = do
   action target
   setCurrentDirectory topDir
 
-storeIfChangeDep :: DepDir -> Target -> IO ()
+storeIfChangeDep :: MetaDir -> Target -> IO ()
 storeIfChangeDep metaDepsDir dep = maybe (return ()) (storeHashFile metaDepsDir dep) =<< getBuiltTargetPath dep
 
-storeIfCreateDep :: DepDir -> Target -> IO ()
-storeIfCreateDep metaDepsDir dep = createEmptyDepFile $ ifCreateDepFile metaDepsDir dep
+storeIfCreateDep :: MetaDir -> Target -> IO ()
+storeIfCreateDep metaDepsDir dep = createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep
 
-storeAlwaysDep :: DepDir -> IO ()
-storeAlwaysDep metaDepsDir = createEmptyDepFile $ alwaysDepFile' metaDepsDir
+storeAlwaysDep :: MetaDir -> IO ()
+storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile' metaDepsDir
 
-storePhonyTarget :: DepDir -> IO () 
-storePhonyTarget metaDepsDir = createEmptyDepFile $ unTarget $ phonyFile' metaDepsDir
+storePhonyTarget :: MetaDir -> IO () 
+storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile' metaDepsDir
 
-storeHashFile :: DepDir -> Target -> Target -> IO ()
-storeHashFile metaDepsDir depName depToHash = writeDepFile theDepFile =<< getTargetStamp depToHash
-  where theDepFile = ifChangeDepFile metaDepsDir depName
+storeHashFile :: MetaDir -> Target -> Target -> IO ()
+storeHashFile metaDepsDir depName depToHash = writeMetaFile theMetaFile =<< getTargetStamp depToHash
+  where theMetaFile = ifChangeMetaFile metaDepsDir depName
 
 ---------------------------------------------------------------------
 -- Functions creating file names for storing dependencies
 ---------------------------------------------------------------------
 -- Form the hash file path for a target's dependency given the current target meta dir and the target's dependency
-depFile :: (FilePath -> FilePath) -> DepDir -> Target -> FilePath
-depFile escapeFunc depDir dep = unDepDir depDir </> escapeFunc (unTarget dep)
+getMetaFile :: (FilePath -> FilePath) -> MetaDir -> Target -> MetaFile
+getMetaFile escapeFunc metaDir dependency = MetaFile $ unMetaDir metaDir </> escapeFunc (unTarget dependency)
 
 -- Functions to get the dependency path for each file type
-ifChangeDepFile :: DepDir -> Target -> FilePath
-ifChangeDepFile = depFile escapeIfChangePath
-ifCreateDepFile :: DepDir -> Target -> FilePath
-ifCreateDepFile = depFile escapeIfCreatePath
-alwaysDepFile' :: DepDir -> FilePath
-alwaysDepFile' depDir = unDepDir depDir </> file
+ifChangeMetaFile :: MetaDir -> Target -> MetaFile 
+ifChangeMetaFile = getMetaFile escapeIfChangePath
+ifCreateMetaFile :: MetaDir -> Target -> MetaFile 
+ifCreateMetaFile = getMetaFile escapeIfCreatePath
+alwaysMetaFile' :: MetaDir -> MetaFile 
+alwaysMetaFile' depDir = MetaFile $ unMetaDir depDir </> file
   where file = "." ++ [always_dependency_prepend] ++ "redo-always" ++ [always_dependency_prepend] ++ "."
 
-phonyFile :: Target -> IO Target 
-phonyFile target = do depDir <- depFileDir target 
+phonyFile :: Target -> IO MetaFile
+phonyFile target = do depDir <- metaFileDir target 
                       return $ phonyFile' depDir
-phonyFile' :: DepDir -> Target 
-phonyFile' metaDepsDir = Target $ unDepDir metaDepsDir </> "." ++ "phony-target" ++ "."
+phonyFile' :: MetaDir -> MetaFile
+phonyFile' metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> "." ++ "phony-target" ++ "."
 
-doFileCache :: DepDir -> FilePath
-doFileCache metaDepsDir = unDepDir metaDepsDir </> ".do.do."
+doFileCache :: MetaDir -> MetaFile  
+doFileCache metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".do.do."
 
 ---------------------------------------------------------------------
 -- Functions escaping and unescaping path names
@@ -561,30 +559,46 @@ unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
                       else (x, xs)
 
 -- Functions to escape and unescape dependencies of different types:
-escapeIfChangePath :: FilePath -> FilePath 
+escapeIfChangePath :: FilePath -> FilePath
 escapeIfChangePath = escapeDependencyPath ifchange_dependency_prepend
 unEscapeIfChangePath :: FilePath -> FilePath 
 unEscapeIfChangePath = unEscapeDependencyPath ifchange_dependency_prepend
-escapeIfCreatePath :: FilePath -> FilePath 
+escapeIfCreatePath :: FilePath -> FilePath
 escapeIfCreatePath = escapeDependencyPath ifcreate_dependency_prepend
 unEscapeIfCreatePath :: FilePath -> FilePath 
 unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 
-
--- TODO - reorganize lower level functions
+---------------------------------------------------------------------
+-- Functions for querying about a Target
+---------------------------------------------------------------------
 -- Does the target file or directory exist on the filesystem?
+-- Checks if a target file is a buildable target, or if it is a source file
+isSourceFile :: Target -> IO Bool
+isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< doesTargetExist target
+  where
+    -- Check's if a target has dependencies stored already
+    hasDependencies :: Target -> IO Bool
+    hasDependencies t = doesMetaDirExist =<< metaFileDir t
+  
 doesTargetExist :: Target -> IO Bool
 doesTargetExist target = (||) <$> doesFileExist filePath <*> doesDirectoryExist filePath
   where filePath = unTarget target
 
-doesDepDirExist :: DepDir -> IO Bool
-doesDepDirExist depDir = doesDirectoryExist $ unDepDir depDir
+---------------------------------------------------------------------
+-- Functions acting on MetaDir
+---------------------------------------------------------------------
+doesMetaDirExist :: MetaDir -> IO Bool
+doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
 
-removeDepDir :: DepDir -> IO ()
-removeDepDir dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive $ unDepDir dir) (\_ -> return())
+doesMetaFileExist :: MetaFile -> IO Bool
+doesMetaFileExist metaFile = doesFileExist $ unMetaFile metaFile
 
-createDepDir :: DepDir -> IO ()
-createDepDir dir = createDirectoryIfMissing True (unDepDir dir)
+removeMetaDir :: MetaDir -> IO ()
+removeMetaDir dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive $ unMetaDir dir) (\_ -> return())
 
-getDepDirContents :: DepDir -> IO [FilePath]
-getDepDirContents dir = getDirectoryContents $ unDepDir dir
+createMetaDir :: MetaDir -> IO ()
+createMetaDir dir = createDirectoryIfMissing True (unMetaDir dir)
+
+getMetaDirContents :: MetaDir -> IO [MetaFile]
+getMetaDirContents dir = do contents <- getDirectoryContents $ unMetaDir dir
+                            return $ map MetaFile contents

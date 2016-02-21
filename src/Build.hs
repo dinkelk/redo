@@ -63,14 +63,14 @@ buildTargets buildFunc targets = do
       tryBuild' absTarget
     tryBuild' target = do lckFileName <- createLockFile target 
                           maybe (return (target, lckFileName)) (runBuild target) 
-                            =<< tryLockFile lckFileName Exclusive
+                            =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
     runBuild target lock = do buildFunc target
                               unlockFile lock
-                              return (Target "", "")
+                              return (Target "", LockFile "")
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (Target, FilePath) -> IO ()
-    waitBuild (Target "", "") = return ()
-    waitBuild (target, lckFileName) = do lock <- lockFile lckFileName Exclusive 
+    waitBuild :: (Target, LockFile) -> IO ()
+    waitBuild (Target "", LockFile "") = return ()
+    waitBuild (target, lckFileName) = do lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
                                          buildFunc target
                                          unlockFile lock
 
@@ -81,7 +81,7 @@ build target doFile = performActionInDir (takeDirectory $ unDoFile doFile) (runD
 -- Run do file if the target was not modified by the user first.
 runDoFile :: Target -> DoFile -> IO () 
 runDoFile target doFile = do 
-  metaDir <- depFileDir target
+  metaDir <- metaFileDir target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
   currentTimeStamp <- safeGetTargetTimeStamp target
   whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp metaDir)
@@ -92,7 +92,7 @@ runDoFile target doFile = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> DoFile -> Maybe Stamp -> DepDir -> IO () 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> MetaDir -> IO () 
 runDoFile' target doFile currentTimeStamp depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
