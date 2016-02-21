@@ -9,12 +9,12 @@ import Control.Applicative ((<$>))
 import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (isNothing, fromJust, fromMaybe)
-import System.Directory (renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory)
+import Data.Maybe (isNothing, fromJust, fromMaybe, isJust)
+import System.Directory (setCurrentDirectory, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv)
-import System.Exit (ExitCode(..), exitWith, exitFailure)
-import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..))
-import System.FilePath (takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
+import System.Exit (ExitCode(..), exitFailure)
+import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
+import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import Data.Bool (bool)
@@ -25,12 +25,12 @@ import PrettyPrint
 import Helpers
 
 -- Just run the do file for a 'redo' command:
-redo :: [Target] -> IO ()
+redo :: [Target] -> IO ExitCode
 redo = buildTargets redo'
   where redo' target = maybe (noDoFileError target) (build target) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
-redoIfChange :: [Target] -> IO ()
+redoIfChange :: [Target] -> IO ExitCode
 redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
@@ -38,9 +38,13 @@ redoIfChange = buildTargets redoIfChange'
       -- TODO maybe get do file from this func
       upToDate' <- upToDate target
       -- Try to run redo if out of date, if it fails, print an error message:
-      unless upToDate' $ maybe (missingDo target) (build target) =<< findDoFile target
+      unless' upToDate' (maybe (missingDo target) (build target) =<< findDoFile target)
+    -- If a do file is not found then return an error message, unless the file exists,
+    -- in which case it is a source file and does not need to be rebuilt
     missingDo target = do exists <- doesTargetExist target
-                          unless exists $ noDoFileError target
+                          unless' exists (noDoFileError target)
+    -- Custom unless which return ExitSuccess if the condition is met
+    unless' condition action = if condition then return ExitSuccess else action
 
 -- Lock a file and run a function that takes that file as input.
 -- If the file is already locked, skip running the function on that
@@ -50,49 +54,92 @@ redoIfChange = buildTargets redoIfChange'
 -- This function allows us to build all the targets that don't have any 
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention
-buildTargets :: (Target -> IO ()) -> [Target] -> IO ()
+buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
+  keepGoing' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
+  let keepGoing = isJust keepGoing'
   -- Try to lock file and build it, accumulate list of unbuilt files
-  remainingTargets <- mapM tryBuild targets 
+  remainingTargets <- mapM' keepGoing tryBuild targets 
   -- Wait to acquire the lock, and build the remaining unbuilt files
-  mapM_ waitBuild remainingTargets          
+  mapM_' keepGoing waitBuild remainingTargets          
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
+    tryBuild :: Target -> IO (Target, LockFile, ExitCode)
     tryBuild target = do 
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
+    tryBuild' :: Target -> IO (Target, LockFile, ExitCode)
     tryBuild' target = do lckFileName <- createLockFile target 
-                          maybe (return (target, lckFileName)) (runBuild target) 
+                          maybe (return (target, lckFileName, ExitSuccess)) (runBuild target) 
                             =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
-    runBuild target lock = do buildFunc target
+    runBuild :: Target -> FileLock -> IO (Target, LockFile, ExitCode)
+    runBuild target lock = do exitCode <- buildFunc target
                               unlockFile lock
-                              return (Target "", LockFile "")
+                              return (Target "", LockFile "", exitCode)
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (Target, LockFile) -> IO ()
-    waitBuild (Target "", LockFile "") = return ()
-    waitBuild (target, lckFileName) = do lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
-                                         buildFunc target
-                                         unlockFile lock
+    waitBuild :: (Target, LockFile, ExitCode) -> IO ExitCode 
+    waitBuild (Target "", LockFile "", exitCode) = return exitCode
+    waitBuild (target, lckFileName, _) = do lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
+                                            exitCode <- buildFunc target
+                                            unlockFile lock
+                                            return exitCode
+    -- Special mapM which exits early if an operation fails
+    mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
+    mapM' = mapM'' ExitSuccess
+      where 
+        mapM'' :: ExitCode -> Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
+        mapM'' exitCode _ _ [] = return [(Target "", LockFile "", exitCode)]
+        mapM'' exitCode keepGoing f (x:xs) = do 
+          (a, b, newExitCode) <- f x 
+          if newExitCode /= ExitSuccess then 
+            if keepGoing then runNext newExitCode (a, b, newExitCode)
+            else return [(a, b, newExitCode)]
+          else runNext exitCode (a, b, newExitCode)
+          where runNext code current = do next <- mapM'' code keepGoing f xs
+                                          return $ current : next
+    -- Special mapM_ which exits early if an operation fails
+    mapM_' :: Bool -> ((Target, LockFile, ExitCode) -> IO ExitCode) -> [(Target, LockFile, ExitCode)] -> IO ExitCode
+    mapM_' = mapM_'' ExitSuccess
+      where 
+        mapM_'' exitCode _ _ [] = return exitCode
+        mapM_'' exitCode keepGoing f (x:xs) = do 
+          newExitCode <- f x 
+          if newExitCode /= ExitSuccess then 
+            if keepGoing then mapM_'' newExitCode keepGoing f xs
+            else return newExitCode
+          else mapM_'' exitCode keepGoing f xs
 
 -- Run a do file in the do file directory on the given target:
-build :: Target -> DoFile -> IO ()
-build target doFile = performActionInDir (takeDirectory $ unDoFile doFile) (runDoFile target) doFile 
+build :: Target -> DoFile -> IO ExitCode
+build target doFile = performActionInDir' (takeDirectory $ unDoFile doFile) (runDoFile target) doFile
+
+-- TODO cleanup
+performActionInDir' :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
+performActionInDir' dir action target = do
+  topDir <- getCurrentDirectory
+  catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
+    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
+    exitFailure)
+  exitCode <- action target
+  setCurrentDirectory topDir
+  return exitCode
 
 -- Run do file if the target was not modified by the user first.
-runDoFile :: Target -> DoFile -> IO () 
+runDoFile :: Target -> DoFile -> IO ExitCode
 runDoFile target doFile = do 
   metaDir <- metaFileDir target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
   currentTimeStamp <- safeGetTargetTimeStamp target
   whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp metaDir)
   where
-    targetModifiedError :: IO ()
-    targetModifiedError = putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
-                                            "If you want to rebuild '" ++ unTarget target ++ "', remove it and try again."
+    targetModifiedError :: IO ExitCode
+    targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
+                                               "If you want to rebuild '" ++ unTarget target ++ "', remove it and try again."
+                             return ExitSuccess
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> DoFile -> Maybe Stamp -> MetaDir -> IO () 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> MetaDir -> IO ExitCode
 runDoFile' target doFile currentTimeStamp depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
@@ -133,23 +180,22 @@ runDoFile' target doFile currentTimeStamp depDir = do
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> do moveTempFiles 
+    ExitSuccess -> do exitCode <- moveTempFiles 
                       markTargetClean depDir -- we just built this target, so we know it is clean now
                       -- If the target exists, then mark the target built with its timestamp
                       targetExists <- doesTargetExist target
                       when targetExists (markTargetBuilt target depDir)
+                      removeTempFiles target
+                      return exitCode
     ExitFailure code -> do markTargetDirty depDir -- we failed to build this target, so mark it dirty
-                           if null keepGoing
-                           then redoError code $ nonZeroExitStr code
-                           else putErrorStrLn $ nonZeroExitStr code
-  -- Remove the temporary files:
-  removeTempFiles target
+                           removeTempFiles target
+                           redoError code $ nonZeroExitStr code
   where
     nonZeroExitStr code = "Error: Redo script '" ++ unDoFile doFile ++ "' exited with non-zero exit code: " ++ show code
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
-    moveTempFiles :: IO ()
+    moveTempFiles :: IO ExitCode
     moveTempFiles = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
@@ -158,9 +204,8 @@ runDoFile' target doFile currentTimeStamp depDir = do
         if currentTimeStamp /= newTimeStamp then dollarOneModifiedError 
         else do
           renameFileOrDir tmp3 target
-          when stdoutExists (do
-            size <- fileSize tmpStdout
-            when (size > 0) wroteToStdoutError)
+          size <- fileSize tmpStdout
+          if stdoutExists && size > 0 then wroteToStdoutError else return ExitSuccess
       else if stdoutExists then
         if currentTimeStamp /= newTimeStamp then dollarOneModifiedError 
         else do
@@ -171,29 +216,29 @@ runDoFile' target doFile currentTimeStamp depDir = do
           -- Usually this target won't exist anyways, but it might exist in the case
           -- of a modified .do file that was generating something, and now is not! In this case we remove the 
           -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-          if size > 0 then renameFileOrDir tmpStdout target 
+          if size > 0 then renameFileOrDir tmpStdout target >> return ExitSuccess
                       -- a stdout file size of 0 was created. This is the default
                       -- behavior on some systems for ">"-ing a file that generatetes
                       -- no stdout. In this case, lets not clutter the directory, and
                       -- instead store a phony target in the meta directory
                       else do safeRemoveFile $ unTarget target
                               storePhonyTarget depDir
+                              return ExitSuccess
       -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
-      else storePhonyTarget depDir 
+      else storePhonyTarget depDir >> return ExitSuccess
       where renameFileOrDir :: FilePath -> Target -> IO () 
             renameFileOrDir old new = catch(renameFile old (unTarget new)) 
               (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> storePhonyTarget depDir))
     
-    wroteToStdoutError :: IO ()
-    wroteToStdoutError  = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
-                                        "You should write status messages to stderr, not stdout." 
-    dollarOneModifiedError :: IO ()
+    wroteToStdoutError :: IO ExitCode
+    wroteToStdoutError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
+                                       "You should write status messages to stderr, not stdout." 
+    dollarOneModifiedError :: IO ExitCode
     dollarOneModifiedError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
-                                        "You should update $3 (the temporary file) or stdout, not $1." 
-    redoError :: Int -> String -> IO ()
+                                           "You should update $3 (the temporary file) or stdout, not $1." 
+    redoError :: Int -> String -> IO ExitCode
     redoError code message = do putErrorStrLn message
-                                removeTempFiles target
-                                exitWith $ ExitFailure code
+                                return $ ExitFailure code
 
 -- Pass redo script 3 arguments:
 -- $1 - the target name
@@ -250,6 +295,6 @@ fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
 
 -- Missing do error function:
-noDoFileError :: Target -> IO()
-noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ unTarget target ++ "'"
-                          exitFailure
+noDoFileError :: Target -> IO ExitCode
+noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build target '" ++ unTarget target ++ "'"
+                          return $ ExitFailure 1

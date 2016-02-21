@@ -10,7 +10,7 @@ import Data.Maybe (isNothing, fromJust, fromMaybe)
 import System.Console.GetOpt
 import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
-import System.Exit (exitSuccess, exitFailure)
+import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
 
 -- Local imports:
@@ -127,10 +127,10 @@ mainTop progName targets = do
   case progName of 
     -- Run redo only on buildable files from the target's directory
     "redo" -> do checkTargets targets'
-                 redo targets'
+                 exitWith =<< redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
     "redo-ifchange" -> do checkTargets targets
-                          redoIfChange targets
+                          exitWith =<< redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -156,22 +156,24 @@ mainTop progName targets = do
     runOutsideDoError program = putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
 
 -- The main function for redo run within a .do file
-mainDo :: String -> [Target] -> IO()
+mainDo :: String -> [Target] -> IO ()
 mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> redo targets
+    "redo" -> exitWith =<< redo targets
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
-    "redo-ifchange" -> do redoIfChange targets
+    "redo-ifchange" -> do exitCode <- redoIfChange targets
+                          -- bug, this needs to run even if the first thing fails
                           storeIfChangeDependencies targets
+                          exitWith exitCode
     -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> storeIfCreateDependencies targets
     -- Store a redo-always dependency for the parent target in the parent target's directory
     "redo-always" -> storeAlwaysDependency
     _ -> return ()
-    
+
 -- Randomly shuffle the order of a list:
 -- http://en.literateprograms.org/Fisher-Yates_shuffle_(Haskell)
 shuffle :: [a] -> IO [a]

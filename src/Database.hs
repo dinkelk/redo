@@ -26,15 +26,12 @@ import PrettyPrint
 import Helpers
 
 -- Type Definitions:
-newtype Stamp = Stamp { unStamp :: BS.ByteString } deriving (Show, Eq)
--- TODO... movie this function inside constructor? What the der?
---unStamp :: Stamp -> BS.ByteString
---unStamp (Stamp s) = s
-newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Eq)
-newtype Target = Target { unTarget :: FilePath } deriving (Eq)
-newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq)
-newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq)
-newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq)
+newtype Stamp = Stamp { unStamp :: BS.ByteString } deriving (Show, Eq) -- Timestamp or hash stamp of a file
+newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Show, Eq) -- The absolute path to a do file
+newtype Target = Target { unTarget :: FilePath } deriving (Eq) -- The absolute path to a target file
+newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq) -- The meta directory associated with a target
+newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
+newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
 newtype DatabaseEntry target dofile depdir = DatabaseEntry (Target, DoFile, MetaDir)
 
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
@@ -107,9 +104,8 @@ cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir
 -- Functions querying the meta directory for a target
 ---------------------------------------------------------------------
 -- Retrieve the cached do file path inside meta dir
--- TODO use catch here instead of doesFileExist
 getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
-getCachedDoFile metaDepsDir = bool (return Nothing) (readCache cache) =<< doesFileExist cache 
+getCachedDoFile metaDepsDir = catch (readCache cache) (\(_ :: SomeException) -> return Nothing)
   where readCache cachedDo = do doFile <- readFile cachedDo
                                 return $ Just $ DoFile doFile
         cache = unMetaFile $ doFileCache metaDepsDir
@@ -249,8 +245,8 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
     (False, False) -> return False `debug'` "+not built"
     -- If the target exists on the filesystem but does not have meta deps dir then redo never
-    -- created it. It must be a source file so it is up to date.
-    (True, False) -> do hashesMatch <- compareHash hashFullPath dep 
+    -- created it. It must be a source file so we need to check its stamp
+    (True, False) -> do hashesMatch <- compareStamp hashFullPath dep 
                         if hashesMatch then return True `debug'` "+unchanged"
                         else return False `debug'` "-changed"                              
     -- If the meta deps dir exists, then we need to check extra info contained within it to determine
@@ -271,7 +267,7 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
           -- If neither a target or a phony target exists, then the target is obviously not up to date
           if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
           -- Check the target against it's stored hash
-          else do hashesMatch <- compareHash hashFullPath (fromJust existingTarget)
+          else do hashesMatch <- compareStamp hashFullPath (fromJust existingTarget)
                   if hashesMatch then upToDate' level dep depDir
                   else return False `debug'` "-dep changed")
   where
@@ -280,11 +276,11 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
     hashFullPath = MetaFile $ unMetaDir parentMetaDir </> hashFilePath
     dep = Target $ removeDotDirs $ doDir </> unEscapeIfChangePath hashFilePath
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
-    compareHash :: MetaFile -> Target -> IO Bool
-    compareHash storedHash fileToHash = do
-      oldHash <- readMetaFile storedHash 
-      newHash <- getTargetStamp fileToHash 
-      return $ oldHash == newHash
+    compareStamp :: MetaFile -> Target -> IO Bool
+    compareStamp storedStamp fileToStamp = do
+      oldStamp <- readMetaFile storedStamp
+      newStamp <- getTargetStamp fileToStamp
+      return $ oldStamp == newStamp
 
 -- Helper function which returns true and marks the target as clean:
 returnTrue :: MetaDir -> IO Bool
@@ -327,7 +323,11 @@ findDoFile absTarget = do
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
       doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath name)
       if isNothing doFile && not (isDrive absPath) then defaultDoPath (takeDirectory absPath) name
-      else return $ Just $ DoFile $ fromJust doFile
+      else returnDoFile doFile
+    -- Return nothing or return the properly wrapped do file path:
+    returnDoFile :: Maybe FilePath -> IO (Maybe DoFile)
+    returnDoFile doFile = if isNothing doFile then return Nothing
+                          else return $ Just $ DoFile $ fromJust doFile
     -- List the possible default.do file candidates relative to the given path:
     candidates path name = map (path </>) (defaults name)
     defaults name = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions name)
@@ -473,6 +473,7 @@ storeDependencies storeAction dependencies = do
 
 -- This applies a function to a target in the directory provided and then
 -- returns the current directory to the starting directory:
+-- TODO: do we still need this?
 performActionInDir :: FilePath -> (t -> IO ()) -> t -> IO ()
 performActionInDir dir action target = do
   topDir <- getCurrentDirectory
@@ -482,8 +483,12 @@ performActionInDir dir action target = do
   action target
   setCurrentDirectory topDir
 
+-- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
+-- because the target still depenends on this target, it just failed to built last time, so we store a
+-- blank (bad) stamp that will never match a successfully built target
 storeIfChangeDep :: MetaDir -> Target -> IO ()
-storeIfChangeDep metaDepsDir dep = maybe (return ()) (storeHashFile metaDepsDir dep) =<< getBuiltTargetPath dep
+storeIfChangeDep metaDepsDir dep = maybe (createEmptyMetaFile theMetaFile) (storeHashFile metaDepsDir dep) =<< getBuiltTargetPath dep
+  where theMetaFile = ifChangeMetaFile metaDepsDir dep
 
 storeIfCreateDep :: MetaDir -> Target -> IO ()
 storeIfCreateDep metaDepsDir dep = createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep
