@@ -35,6 +35,7 @@ redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
       --putStatusStrLn $ "redo-ifchange " ++ target
+      -- TODO maybe get do file from this func
       upToDate' <- upToDate target
       -- Try to run redo if out of date, if it fails, print an error message:
       unless upToDate' $ maybe (missingDo target) (build target) =<< findDoFile target
@@ -74,11 +75,11 @@ buildTargets buildFunc targets = do
                                          unlockFile lock
 
 -- Run a do file in the do file directory on the given target:
-build :: Target -> FilePath -> IO ()
-build target doFile = performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
+build :: Target -> DoFile -> IO ()
+build target doFile = performActionInDir (takeDirectory $ unDoFile doFile) (runDoFile target) doFile 
 
 -- Run do file if the target was not modified by the user first.
-runDoFile :: Target -> FilePath -> IO () 
+runDoFile :: Target -> DoFile -> IO () 
 runDoFile target doFile = do 
   metaDir <- depFileDir target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
@@ -91,7 +92,7 @@ runDoFile target doFile = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> FilePath -> Maybe Stamp -> FilePath -> IO () 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> FilePath -> IO () 
 runDoFile' target doFile currentTimeStamp depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
@@ -144,7 +145,7 @@ runDoFile' target doFile currentTimeStamp depDir = do
   -- Remove the temporary files:
   removeTempFiles target
   where
-    nonZeroExitStr code = "Error: Redo script '" ++ doFile ++ "' exited with non-zero exit code: " ++ show code
+    nonZeroExitStr code = "Error: Redo script '" ++ unDoFile doFile ++ "' exited with non-zero exit code: " ++ show code
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
@@ -184,10 +185,10 @@ runDoFile' target doFile currentTimeStamp depDir = do
               (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> storePhonyTarget depDir))
     
     wroteToStdoutError :: IO ()
-    wroteToStdoutError  = redoError 1 $ "Error: '" ++ doFile ++ "' wrote to stdout and created $3.\n" ++
+    wroteToStdoutError  = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
                                         "You should write status messages to stderr, not stdout." 
     dollarOneModifiedError :: IO ()
-    dollarOneModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
+    dollarOneModifiedError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
                                         "You should update $3 (the temporary file) or stdout, not $1." 
     redoError :: Int -> String -> IO ()
     redoError code message = do putErrorStrLn message
@@ -198,10 +199,10 @@ runDoFile' target doFile currentTimeStamp depDir = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
-shellCmd :: String -> FilePath -> Target -> IO String
+shellCmd :: String -> DoFile -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, show doFile, show (unTarget target), show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
+  return $ unwords [shebang, show $ unDoFile doFile, show $ unTarget target, show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
@@ -215,15 +216,15 @@ shellCmd shellArgs doFile target = do
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
-    arg2 = if (dropExtensions . takeFileName) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
-    doExtensions = (takeExtensions . dropExtension) doFile -- remove .do, then grab the rest of the extensions
+    arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
+    doExtensions = (takeExtensions . dropExtension . unDoFile) doFile -- remove .do, then grab the rest of the extensions
     createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
     -- Read the shebang from a file and use that as the command. This allows us to run redo files that are in a language
     -- other than shell, ie. python or perl
-    readShebang :: FilePath -> IO String
+    readShebang :: DoFile -> IO String
     readShebang file = readFirstLine >>= extractShebang
       where 
-        readFirstLine = catch (withFile file ReadMode hGetLine) (\(_ :: SomeException) -> return "")
+        readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
 -- Temporary files:

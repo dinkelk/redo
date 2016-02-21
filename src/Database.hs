@@ -4,8 +4,8 @@
 module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeDependencies, storeIfCreateDependencies, 
                 storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
                 markTargetDirty, markTargetBuilt, getFileTimeStamp, depFileDir, getTargetBuiltTimeStamp, findDoFile,
-                initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified, Stamp, Target(..), DoFile,
-                doesTargetExist, performActionInDir, unTarget) where
+                initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified, Stamp, Target(..), DoFile(..),
+                doesTargetExist, performActionInDir) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
@@ -55,7 +55,7 @@ newtype DatabaseEntry target dofile depdir = DatabaseEntry (Target, DoFile, Depe
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
 -- Directory for storing and fetching data on dependencies of redo targets.
-redoMetaDir :: IO String
+redoMetaDir :: IO FilePath
 redoMetaDir = getAppUserDataDirectory "redo"
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
@@ -80,35 +80,35 @@ hashString target = do
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-initializeMetaDepsDir :: Target -> FilePath -> IO FilePath
+initializeMetaDepsDir :: Target -> DoFile -> IO FilePath
 initializeMetaDepsDir target doFile = do
   metaDepsDir <- depFileDir target
   initializeMetaDepsDir' metaDepsDir doFile
   return metaDepsDir
 
-initializeMetaDepsDir' :: FilePath -> FilePath -> IO ()
+initializeMetaDepsDir' :: FilePath -> DoFile -> IO ()
 initializeMetaDepsDir' metaDepsDir doFile = do
   safeRemoveDirectoryRecursive metaDepsDir
   createDirectoryIfMissing True metaDepsDir 
   -- Write out .do script as dependency:
-  storeHashFile metaDepsDir (Target doFile) (Target doFile)
+  storeHashFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
   -- Cache the do file:
   cacheDoFile metaDepsDir doFile
   --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
-cacheDoFile :: FilePath -> FilePath -> IO ()
-cacheDoFile metaDepsDir = writeFile (metaDepsDir </> ".do.do.")
+cacheDoFile :: FilePath -> DoFile -> IO ()
+cacheDoFile metaDepsDir doFile = writeFile (metaDepsDir </> ".do.do.") (unDoFile doFile)
 
 ---------------------------------------------------------------------
 -- Functions querying the meta directory for a target
 ---------------------------------------------------------------------
 -- Retrieve the cached do file path inside meta dir
-getCachedDoFile :: FilePath -> IO (Maybe FilePath)
+getCachedDoFile :: FilePath -> IO (Maybe DoFile)
 getCachedDoFile metaDepsDir = bool (return Nothing) (readCache doFileCache) =<< doesFileExist doFileCache
   where doFileCache = metaDepsDir </> ".do.do."
         readCache cachedDo = do doFile <- readFile cachedDo
-                                return $ Just doFile
+                                return $ Just $ DoFile doFile
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing
@@ -196,7 +196,7 @@ upToDate' level target depDir = do
     -- it is not up to date.
     if newDo then returnFalse depDir `debug'` "-new .do"
     else do
-      let doFileDir = takeDirectory absDoFile
+      let doFileDir = takeDirectory $ unDoFile absDoFile
       -- If all of the dependencies are up to date then this target is also up to date, so mark it
       -- as such and return true. Else, return false.
       depsClean <- depsUpToDate (level+1) target depDir doFileDir 
@@ -205,7 +205,7 @@ upToDate' level target depDir = do
   where 
     debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
-    newDoFile :: FilePath -> FilePath -> IO Bool
+    newDoFile :: FilePath -> DoFile -> IO Bool
     newDoFile metaDepsDir doFile =
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
@@ -316,20 +316,20 @@ whenTargetNotModified previousTimeStamp currentTimeStamp failAction action =
   else failAction
 
 -- Returns the absolute path to the do file given the absolute path to the target:
-findDoFile :: Target -> IO (Maybe FilePath)
+findDoFile :: Target -> IO (Maybe DoFile)
 findDoFile absTarget = do 
   let (targetDir, targetName) = splitFileName $ unTarget absTarget
-  let targetDo = removeDotDirs $ unTarget absTarget ++ ".do" 
-  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist targetDo
+  let targetDo = DoFile $ removeDotDirs $ unTarget absTarget ++ ".do" 
+  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist (unDoFile targetDo)
   where
     -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
     -- found or "/" is reached.
-    defaultDoPath :: FilePath -> FilePath -> IO (Maybe FilePath)
+    defaultDoPath :: FilePath -> FilePath -> IO (Maybe DoFile)
     defaultDoPath absPath' name = do
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
       doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath name)
       if isNothing doFile && not (isDrive absPath) then defaultDoPath (takeDirectory absPath) name
-      else return doFile
+      else return $ Just $ DoFile $ fromJust doFile
     -- List the possible default.do file candidates relative to the given path:
     candidates path name = map (path </>) (defaults name)
     defaults name = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions name)
