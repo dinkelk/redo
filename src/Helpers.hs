@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(performActionInDir, findDoFile, doesTargetExist, debug, makeRelative', canonicalizePath', 
+module Helpers(debug, makeRelative', canonicalizePath', 
                safeRemoveGlob, safeRemoveDirectoryRecursive, removeDotDirs, mapAnd, mapOr) where
 
 import Control.Applicative ((<$>),(<*>))
@@ -21,46 +21,6 @@ import PrettyPrint
 debug :: c -> String -> c
 debug = flip trace
 --debug a b = a
-
--- This applies a function to a target in the directory provided and then
--- returns the current directory to the starting directory:
-performActionInDir :: FilePath -> (FilePath -> IO ()) -> FilePath -> IO ()
-performActionInDir dir action target = do
-  topDir <- getCurrentDirectory
-  catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-    exitFailure)
-  action target
-  setCurrentDirectory topDir
-
--- Returns the absolute path to the do file given the absolute path to the target:
-findDoFile :: FilePath -> IO (Maybe FilePath)
-findDoFile absTarget = do 
-  let (targetDir, targetName) = splitFileName absTarget
-  let targetDo = removeDotDirs $ absTarget ++ ".do" 
-  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist targetDo
-  where
-    -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
-    -- found or "/" is reached.
-    defaultDoPath :: FilePath -> FilePath -> IO (Maybe FilePath)
-    defaultDoPath absPath' name = do
-      let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
-      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath name)
-      if isNothing doFile && not (isDrive absPath) then defaultDoPath (takeDirectory absPath) name
-      else return doFile
-    -- List the possible default.do file candidates relative to the given path:
-    candidates path name = map (path </>) (defaults name)
-    defaults name = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions name)
-    -- Form all possible matching default.do files in order of preference:
-    getDefaultDo :: FilePath -> [FilePath]
-    getDefaultDo filename = filename : if smallfilename == filename then [] else getDefaultDo $ dropFirstExtension filename
-      where smallfilename = dropExtension filename
-            basefilename = dropExtensions filename
-            dropFirstExtension fname = basefilename ++ takeExtensions (drop 1 (takeExtensions fname))
-
--- Does the target file or directory exist on the filesystem?
-doesTargetExist :: FilePath -> IO Bool
-doesTargetExist target = (||) <$> doesFileExist target <*> doesDirectoryExist target
 
 -- Removes ".." and "." directories when possible:
 removeDotDirs :: FilePath -> FilePath

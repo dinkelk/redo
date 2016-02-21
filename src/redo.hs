@@ -105,15 +105,16 @@ main = do
     -- Shuffle the targets if required:
     targetsToRun targets = do shuffleTargets' <- lookupEnv "REDO_SHUFFLE"
                               let shuffleTargets = fromMaybe "" shuffleTargets'
-                              if null shuffleTargets then return targets 
-                              else shuffle targets
+                              if null shuffleTargets then return targets'
+                              else shuffle targets'
+      where targets' = map Target targets
     -- Check if redo is being run from inside of a .do file, or if this is the top level run
     -- Run the correct main accordingly
     mainToRun = do runFromDoFile <- isRunFromDoFile
                    return $ if runFromDoFile then mainDo else mainTop
 
 -- The main function for redo run at a top level (outside of a .do file)
-mainTop :: String -> [FilePath] -> IO()
+mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
   -- Remove any old lock files, the don't mean anything for this build
   removeLockFiles
@@ -136,9 +137,9 @@ mainTop progName targets = do
     _ -> return ()
   where
     -- If just 'redo' is run, then assume the default target as 'all'
-    targets' = if null targets then ["all"] else targets
+    targets' = if null targets then [Target "all"] else targets
     -- Filter out targets that are not buildable:
-    checkTargets :: [FilePath] -> IO ()
+    checkTargets :: [Target] -> IO ()
     checkTargets = mapM_ check
       where
         check target = do 
@@ -146,8 +147,8 @@ mainTop progName targets = do
           -- else, continue to run the action on the target
           isSource <- isSourceFile target
           when isSource $ do
-            putWarningStrLn $ "Warning: '" ++ target ++ "' exists and is marked as a source file. Not redoing."
-            putWarningStrLn $ "If you believe '" ++ target ++ "' is buildable, remove it and try again."
+            putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' exists and is marked as a source file. Not redoing."
+            putWarningStrLn $ "If you believe '" ++ unTarget target ++ "' is buildable, remove it and try again."
             exitFailure
 
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
@@ -155,7 +156,7 @@ mainTop progName targets = do
     runOutsideDoError program = putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
 
 -- The main function for redo run within a .do file
-mainDo :: String -> [FilePath] -> IO()
+mainDo :: String -> [Target] -> IO()
 mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 

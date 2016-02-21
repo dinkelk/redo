@@ -5,6 +5,7 @@
 module Build(redo, redoIfChange, makeRelative') where
 
 -- System imports:
+import Control.Applicative ((<$>))
 import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
@@ -24,12 +25,12 @@ import PrettyPrint
 import Helpers
 
 -- Just run the do file for a 'redo' command:
-redo :: [FilePath] -> IO ()
+redo :: [Target] -> IO ()
 redo = buildTargets redo'
   where redo' target = maybe (noDoFileError target) (build target) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
-redoIfChange :: [FilePath] -> IO ()
+redoIfChange :: [Target] -> IO ()
 redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
@@ -48,7 +49,7 @@ redoIfChange = buildTargets redoIfChange'
 -- This function allows us to build all the targets that don't have any 
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention
-buildTargets :: (FilePath -> IO ()) -> [FilePath] -> IO ()
+buildTargets :: (Target -> IO ()) -> [Target] -> IO ()
 buildTargets buildFunc targets = do
   -- Try to lock file and build it, accumulate list of unbuilt files
   remainingTargets <- mapM tryBuild targets 
@@ -57,27 +58,27 @@ buildTargets buildFunc targets = do
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild target = do 
-      absTarget <- canonicalizePath' target
+      absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
     tryBuild' target = do lckFileName <- createLockFile target 
                           maybe (return (target, lckFileName)) (runBuild target) 
                             =<< tryLockFile lckFileName Exclusive
     runBuild target lock = do buildFunc target
                               unlockFile lock
-                              return ("", "")
+                              return (Target "", "")
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (FilePath, FilePath) -> IO ()
-    waitBuild ("", "") = return ()
+    waitBuild :: (Target, FilePath) -> IO ()
+    waitBuild (Target "", "") = return ()
     waitBuild (target, lckFileName) = do lock <- lockFile lckFileName Exclusive 
                                          buildFunc target
                                          unlockFile lock
 
 -- Run a do file in the do file directory on the given target:
-build :: FilePath -> FilePath -> IO ()
+build :: Target -> FilePath -> IO ()
 build target doFile = performActionInDir (takeDirectory doFile) (runDoFile target) doFile 
 
 -- Run do file if the target was not modified by the user first.
-runDoFile :: FilePath -> FilePath -> IO () 
+runDoFile :: Target -> FilePath -> IO () 
 runDoFile target doFile = do 
   metaDir <- depFileDir target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
@@ -85,12 +86,12 @@ runDoFile target doFile = do
   whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp metaDir)
   where
     targetModifiedError :: IO ()
-    targetModifiedError = putWarningStrLn $ "Warning: '" ++ target ++ "' was modified outside of redo. Skipping...\n" ++
-                                            "If you want to rebuild '" ++ target ++ "', remove it and try again."
+    targetModifiedError = putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
+                                            "If you want to rebuild '" ++ unTarget target ++ "', remove it and try again."
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: FilePath -> FilePath -> Maybe Stamp -> FilePath -> IO () 
+runDoFile' :: Target -> FilePath -> Maybe Stamp -> FilePath -> IO () 
 runDoFile' target doFile currentTimeStamp depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
@@ -106,11 +107,11 @@ runDoFile' target doFile currentTimeStamp depDir = do
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
   let sessionNumber = fromMaybe "" sessionNumber'
-  let targetRel2Do = makeRelative' redoPath target
+  let targetRel2Do = Target $ makeRelative' redoPath (unTarget target)
   cmd <- shellCmd shellArgs doFile targetRel2Do
 
   -- Print what we are currently "redoing"
-  putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath target)
+  putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
@@ -125,7 +126,7 @@ runDoFile' target doFile currentTimeStamp depDir = do
                       $ insert "REDO_SHUFFLE" shuffleDeps
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
-                      $ insert "REDO_TARGET" target 
+                      $ insert "REDO_TARGET" (unTarget target)
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
@@ -149,8 +150,8 @@ runDoFile' target doFile currentTimeStamp depDir = do
     tmpStdout = tmpStdoutFile target 
     moveTempFiles :: IO ()
     moveTempFiles = do 
-      tmp3Exists <- doesTargetExist tmp3
-      stdoutExists <- doesTargetExist tmpStdout
+      tmp3Exists <- doesTargetExist $ Target tmp3
+      stdoutExists <- doesTargetExist $ Target tmpStdout
       newTimeStamp <- safeGetTargetTimeStamp target
       if tmp3Exists then
         if currentTimeStamp /= newTimeStamp then dollarOneModifiedError 
@@ -174,19 +175,19 @@ runDoFile' target doFile currentTimeStamp depDir = do
                       -- behavior on some systems for ">"-ing a file that generatetes
                       -- no stdout. In this case, lets not clutter the directory, and
                       -- instead store a phony target in the meta directory
-                      else do safeRemoveFile target
+                      else do safeRemoveFile $ unTarget target
                               storePhonyTarget depDir
       -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
       else storePhonyTarget depDir 
-      where renameFileOrDir :: FilePath -> FilePath -> IO () 
-            renameFileOrDir old new = catch(renameFile old new) 
-              (\(_ :: SomeException) -> catch(renameDirectory old new) (\(_ :: SomeException) -> storePhonyTarget depDir))
+      where renameFileOrDir :: FilePath -> Target -> IO () 
+            renameFileOrDir old new = catch(renameFile old (unTarget new)) 
+              (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> storePhonyTarget depDir))
     
     wroteToStdoutError :: IO ()
     wroteToStdoutError  = redoError 1 $ "Error: '" ++ doFile ++ "' wrote to stdout and created $3.\n" ++
                                         "You should write status messages to stderr, not stdout." 
     dollarOneModifiedError :: IO ()
-    dollarOneModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ target ++ "' directly.\n" ++
+    dollarOneModifiedError = redoError 1 $ "Error: '" ++ doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
                                         "You should update $3 (the temporary file) or stdout, not $1." 
     redoError :: Int -> String -> IO ()
     redoError code message = do putErrorStrLn message
@@ -197,10 +198,10 @@ runDoFile' target doFile currentTimeStamp depDir = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
-shellCmd :: String -> FilePath -> FilePath -> IO String
+shellCmd :: String -> FilePath -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, show doFile, show target, show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
+  return $ unwords [shebang, show doFile, show (unTarget target), show arg2, show $ tmp3File target, ">", show $ tmpStdoutFile target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
@@ -214,7 +215,7 @@ shellCmd shellArgs doFile target = do
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
-    arg2 = if (dropExtensions . takeFileName) doFile == "default" then createArg2 target doExtensions else target
+    arg2 = if (dropExtensions . takeFileName) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
     doExtensions = (takeExtensions . dropExtension) doFile -- remove .do, then grab the rest of the extensions
     createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
     -- Read the shebang from a file and use that as the command. This allows us to run redo files that are in a language
@@ -226,16 +227,16 @@ shellCmd shellArgs doFile target = do
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
 -- Temporary files:
-tmp3File :: FilePath -> FilePath
-tmp3File target = target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-tmpStdoutFile :: FilePath -> FilePath
+tmp3File :: Target -> FilePath
+tmp3File target = unTarget target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
+tmpStdoutFile :: Target -> FilePath
 -- Stdout file name. Note we make this in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
-tmpStdoutFile target = takeFileName target ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
-removeTempFiles :: FilePath -> IO ()
+removeTempFiles :: Target -> IO ()
 removeTempFiles target = do safeRemoveFile $ tmp3File target
                             safeRemoveFile $ tmpStdoutFile target
                      
@@ -248,6 +249,6 @@ fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
 
 -- Missing do error function:
-noDoFileError :: FilePath -> IO()
-noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ target ++ "'"
+noDoFileError :: Target -> IO()
+noDoFileError target = do putErrorStrLn $ "Error: No .do file found for target '" ++ unTarget target ++ "'"
                           exitFailure
