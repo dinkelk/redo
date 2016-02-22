@@ -1,8 +1,7 @@
 rm -f exists ifcreate[12] ifcreate[12].log ifcreate[12].dep
 . ../skip-if-minimal-do.sh
 touch exists
-#redo-ifcreate exists 2>/dev/null && exit 91
-redo-ifcreate exists 2>/dev/null || exit 91 # Why does the file have to NOT exist when first running this?
+redo-ifcreate exists 2>/dev/null && exit 91
 rm exists
 redo-ifcreate exists || exit 92
 

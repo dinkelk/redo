@@ -495,7 +495,8 @@ storeIfChangeDep metaDepsDir dep = maybe (createEmptyMetaFile theMetaFile) (stor
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: MetaDir -> Target -> IO ()
-storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) (return ()) =<< doesTargetExist dep
+storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) 
+  (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
 
 storeAlwaysDep :: MetaDir -> IO ()
 storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile' metaDepsDir
