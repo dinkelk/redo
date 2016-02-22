@@ -493,8 +493,9 @@ storeIfChangeDep :: MetaDir -> Target -> IO ()
 storeIfChangeDep metaDepsDir dep = maybe (createEmptyMetaFile theMetaFile) (storeHashFile metaDepsDir dep) =<< getBuiltTargetPath dep
   where theMetaFile = ifChangeMetaFile metaDepsDir dep
 
+-- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: MetaDir -> Target -> IO ()
-storeIfCreateDep metaDepsDir dep = createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep
+storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) (return ()) =<< doesTargetExist dep
 
 storeAlwaysDep :: MetaDir -> IO ()
 storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile' metaDepsDir
