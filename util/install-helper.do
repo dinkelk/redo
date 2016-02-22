@@ -1,5 +1,5 @@
 # Dependencies:
-source=InstallHelper.hs
+source=*.hs
 redo-ifchange $source
 
 ROOT=`pwd`/..
