@@ -7,8 +7,3 @@ installdir=../bin
 mkdir -p $installdir
 for b in $binaries; do strip $b; done
 mv $binaries $installdir 
-
-# Run the installation helper:
-redo-ifchange ../util/install-helper
-chmod +x ../util/install-helper
-../util/install-helper
