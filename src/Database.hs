@@ -5,7 +5,7 @@ module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeD
                 storeAlwaysDependency, upToDate, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
                 markTargetDirty, markTargetBuilt, getTargetTimeStamp, metaFileDir, getTargetBuiltTimeStamp, findDoFile,
                 initializeMetaDepsDir', safeGetTargetTimeStamp, whenTargetNotModified, Stamp, Target(..), DoFile(..),
-                MetaDir(..), LockFile(..), doesTargetExist, performActionInDir) where
+                MetaDir(..), LockFile(..), doesTargetExist) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catchJust, catch, SomeException(..))
@@ -15,7 +15,7 @@ import Crypto.Hash.MD5 (hash)
 import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, fromJust, listToMaybe)
-import System.Directory (removeDirectoryRecursive, setCurrentDirectory, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (removeDirectoryRecursive, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (takeExtensions, takeExtension, dropExtension, dropExtensions, isDrive, normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
@@ -32,7 +32,6 @@ newtype Target = Target { unTarget :: FilePath } deriving (Eq) -- The absolute p
 newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq) -- The meta directory associated with a target
 newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
-newtype DatabaseEntry target dofile depdir = DatabaseEntry (Target, DoFile, MetaDir)
 
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
@@ -455,15 +454,15 @@ getRedoEnv = do
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
 storeAlwaysDependency = do 
-  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
-  performActionInDir parentRedoPath storeAlwaysDep parentRedoMetaDir
+  (_, parentRedoMetaDir) <- getRedoEnv
+  storeAlwaysDep parentRedoMetaDir
 
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
   (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
-  mapM_ (performActionInDir parentRedoPath (storeAction parentRedoMetaDir)) dependenciesRel2Parent
+  mapM_ (storeAction parentRedoMetaDir) dependenciesRel2Parent
   where
     makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
     makeRelativeToParent parent targets = do
@@ -473,18 +472,6 @@ storeDependencies storeAction dependencies = do
       -- if 'cd' was used in the .do script.
       -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
       return $ map (Target . makeRelative parent . (currentDir </>) . unTarget) targets
-
--- This applies a function to a target in the directory provided and then
--- returns the current directory to the starting directory:
--- TODO: do we still need this?
-performActionInDir :: FilePath -> (t -> IO ()) -> t -> IO ()
-performActionInDir dir action target = do
-  --topDir <- getCurrentDirectory
-  --catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-  --  putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-  --  exitFailure)
-  action target
-  --setCurrentDirectory topDir
 
 -- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
 -- because the target still depenends on this target, it just failed to built last time, so we store a
