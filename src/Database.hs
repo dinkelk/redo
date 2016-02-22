@@ -149,28 +149,30 @@ upToDate target = do
   targetExists <- doesTargetExist target
   case (targetExists, hasMetaDeps) of 
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
-    (False, False) -> return False `debug'` "+not built"
+    (False, False) -> return False `debug'` "-never built"
     -- If the target exists on the filesystem but does not have meta deps dir then redo never
     -- created it. It must be a source file so it is up to date.
     (True, False) -> return True `debug'` "+source"
     -- If the meta deps dir exists, then we need to check extra info contained within it to determine
     -- if the target is up to date:
     (_, True) -> do
-      dirty <- isTargetMarkedDirty depDir
-      -- If we have already checked off this target as dirty, don't delay, return not up to date
-      if dirty then return False `debug'` "-dirty"
+      existingTarget <- getBuiltTargetPath' depDir target
+      -- If neither a target or a phony target exists, then the target is obviously not up to date
+      if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
       else do
-        clean <- isTargetMarkedClean depDir
-        -- If we have already checked off this target as up to date, there is no need to check again
-        if clean then return True `debug'` "+clean"
-        else do 
-          cachedTimeStamp <- getTargetBuiltTimeStamp depDir
-          currentTimeStamp <- safeGetTargetTimeStamp target
-          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
-            existingTarget <- getBuiltTargetPath' depDir target
-            -- If neither a target or a phony target exists, then the target is obviously not up to date
-            if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
-            else upToDate' 0 target depDir)
+        dirty <- isTargetMarkedDirty depDir
+        -- If we have already checked off this target as dirty, don't delay, return not up to date
+        if dirty then return False `debug'` "-dirty"
+        else do
+          clean <- isTargetMarkedClean depDir
+          -- If we have already checked off this target as up to date, there is no need to check again
+          if clean then return True `debug'` "+clean"
+          else do 
+            cachedTimeStamp <- getTargetBuiltTimeStamp depDir
+            currentTimeStamp <- safeGetTargetTimeStamp target
+            whenTargetNotModified cachedTimeStamp currentTimeStamp 
+              (return False `debug'` "-modified") 
+              (upToDate' 0 target depDir)
   where
     -- Convenient debug function:
     debug' = debugUpToDate 0 target
@@ -243,7 +245,7 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
   targetExists <- doesTargetExist dep
   case (targetExists, hasMetaDeps) of 
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
-    (False, False) -> return False `debug'` "+not built"
+    (False, False) -> return False `debug'` "-never built"
     -- If the target exists on the filesystem but does not have meta deps dir then redo never
     -- created it. It must be a source file so we need to check its stamp
     (True, False) -> do hashesMatch <- compareStamp hashFullPath dep 
@@ -252,24 +254,25 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
     -- If the meta deps dir exists, then we need to check extra info contained within it to determine
     -- if the target is up to date:
     (_, True) -> do
-      dirty <- isTargetMarkedDirty depDir
-      -- If we have already checked off this target as dirty, don't delay, return not up to date
-      if dirty then return False `debug'` "-dirty"
+      existingTarget <- getBuiltTargetPath' depDir dep
+      -- If neither a target or a phony target exists, then the target is obviously not up to date
+      if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
       else do
-        clean <- isTargetMarkedClean depDir
-        -- If we have already checked off this target as up to date, there is no need to check again
-        if clean then return True `debug'` "+clean"
-        else do 
-          cachedTimeStamp <- getTargetBuiltTimeStamp depDir
-          currentTimeStamp <- safeGetTargetTimeStamp dep
-          whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
-          existingTarget <- getBuiltTargetPath' depDir dep
-          -- If neither a target or a phony target exists, then the target is obviously not up to date
-          if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
-          -- Check the target against it's stored hash
-          else do hashesMatch <- compareStamp hashFullPath (fromJust existingTarget)
-                  if hashesMatch then upToDate' level dep depDir
-                  else return False `debug'` "-dep changed")
+        dirty <- isTargetMarkedDirty depDir
+        -- If we have already checked off this target as dirty, don't delay, return not up to date
+        if dirty then return False `debug'` "-dirty"
+        else do
+          clean <- isTargetMarkedClean depDir
+          -- If we have already checked off this target as up to date, there is no need to check again
+          if clean then return True `debug'` "+clean"
+          else do 
+            cachedTimeStamp <- getTargetBuiltTimeStamp depDir
+            currentTimeStamp <- safeGetTargetTimeStamp dep
+            whenTargetNotModified cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
+              -- Check the target against it's stored hash
+              hashesMatch <- compareStamp hashFullPath (fromJust existingTarget)
+              if hashesMatch then upToDate' level dep depDir
+              else return False `debug'` "-dep changed")
   where
     debug' = debugUpToDate level dep
     hashFilePath = unMetaFile hashFile

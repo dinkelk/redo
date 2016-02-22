@@ -191,7 +191,8 @@ runDoFile' target doFile currentTimeStamp depDir = do
                            removeTempFiles target
                            redoError code $ nonZeroExitStr code
   where
-    nonZeroExitStr code = "Error: Redo script '" ++ unDoFile doFile ++ "' exited with non-zero exit code: " ++ show code
+    nonZeroExitStr code = "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
+                          unTarget target ++ "' with exit code: " ++ show code 
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
