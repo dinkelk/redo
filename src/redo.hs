@@ -153,7 +153,8 @@ mainTop progName targets = do
 
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
     runOutsideDoError :: String -> IO ()
-    runOutsideDoError program = putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
+    runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
+                                   exitFailure
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()
