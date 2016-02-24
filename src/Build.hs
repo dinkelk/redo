@@ -19,7 +19,9 @@ import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 
 -- Local imports:
-import Database
+import Types
+import MetaDirectory
+import UpToDate
 import PrettyPrint
 import Helpers
 
@@ -85,7 +87,7 @@ buildTargets buildFunc targets = do
                                             return exitCode
     -- Special mapM which exits early if an operation fails
     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
-    mapM' keepGoing f list = mapM'' ExitSuccess list
+    mapM' keepGoing f = mapM'' ExitSuccess
       where 
         mapM'' exitCode [] = return [(Target "", LockFile "", exitCode)]
         mapM'' exitCode (x:xs) = do 
@@ -98,7 +100,7 @@ buildTargets buildFunc targets = do
                                           return $ current : next
     -- Special mapM_ which exits early if an operation fails
     mapM_' :: Bool -> ((Target, LockFile, ExitCode) -> IO ExitCode) -> [(Target, LockFile, ExitCode)] -> IO ExitCode
-    mapM_' keepGoing f list = mapM_'' ExitSuccess list
+    mapM_' keepGoing f = mapM_'' ExitSuccess
       where 
         mapM_'' exitCode [] = return exitCode
         mapM_'' exitCode (x:xs) = do 
@@ -126,11 +128,11 @@ performActionInDir dir action target = do
 -- Run do file if the target was not modified by the user first.
 runDoFile :: Target -> DoFile -> IO ExitCode
 runDoFile target doFile = do 
-  metaDir <- metaFileDir target
-  cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
-  currentTimeStamp <- safeGetTargetTimeStamp target
+  metaDepsDir <- metaDir target
+  cachedTimeStamp <- getTargetBuiltTimeStamp metaDepsDir
+  currentTimeStamp <- safeGetStamp target
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-  whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDir)
+  whenEqualOrNothing cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDepsDir)
   where
     targetModifiedError :: IO ExitCode
     targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
@@ -163,7 +165,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  initializeMetaDepsDir' depDir doFile
+  initializeMetaDepsDir depDir doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
@@ -201,7 +203,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- fileSize tmpStdout
-      newTimeStamp <- safeGetTargetTimeStamp target
+      newTimeStamp <- safeGetStamp target
       targetIsStillDirectory <- doesDirectoryExist $ unTarget target
       -- See if the user modified $1 directly... we don't care if the user modified a directory target however
       if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then dollarOneModifiedError 

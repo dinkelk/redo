@@ -14,17 +14,10 @@ import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
 
 -- Local imports:
-import Database
+import MetaDirectory
 import PrettyPrint
 import Build
-
--- Make using trace easier, for debugging only:
--- traceShow' arg = traceShow arg arg
-
--- We want to be able to show create process:
--- deriving instance Show CreateProcess
--- deriving instance Show StdStream
--- deriving instance Show CmdSpec
+import Types
 
 -- Print the program version and license information:
 printVersion :: IO ()

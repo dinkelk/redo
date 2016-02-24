@@ -1,11 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Helpers(debug, makeRelative', canonicalizePath', safeRemoveDirectoryRecursive,
-               safeRemoveGlob, removeDotDirs, mapAnd, mapOr) where
+               safeRemoveGlob, removeDotDirs, mapAnd, mapOr, whenEqualOrNothing) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..), catchJust)
 import Control.Monad (guard)
+import Data.Maybe (isNothing)
 import Debug.Trace (trace)
 import System.FilePath (joinPath, splitDirectories, (</>))
 import System.FilePath.Glob (globDir1, compile)
@@ -78,3 +79,11 @@ mapOr func (x:xs) = do boolean <- func x
                        -- Optimization: cut the evaluation short if a single True is found
                        if boolean then return True
                        else mapOr func xs
+
+-- Run an action if the both s1 and s2 are equal or if either is nothing
+whenEqualOrNothing :: (Eq s) => Maybe s -> Maybe s -> t -> t -> t
+whenEqualOrNothing s1 s2 failAction action =
+  if isNothing s1 || 
+     isNothing s2 || 
+     s1 == s2 then action
+  else failAction
