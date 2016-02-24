@@ -1,19 +1,21 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Helpers(debug, makeRelative', canonicalizePath', 
+module Helpers(debug, makeRelative', canonicalizePath', safeRemoveDirectoryRecursive,
                safeRemoveGlob, removeDotDirs, mapAnd, mapOr) where
 
 import Control.Applicative ((<$>))
-import Control.Exception (catch, SomeException(..))
+import Control.Exception (catch, SomeException(..), catchJust)
+import Control.Monad (guard)
 import Debug.Trace (trace)
 import System.FilePath (joinPath, splitDirectories, (</>))
 import System.FilePath.Glob (globDir1, compile)
-import System.Directory (removeFile, makeAbsolute)
+import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive)
+import System.IO.Error (isDoesNotExistError)
 
 -- Debug helpers:
 debug :: c -> String -> c
-debug = flip trace
---debug a b = a
+--debug = flip trace
+debug a b = a
 
 -- Removes ".." and "." directories when possible:
 removeDotDirs :: FilePath -> FilePath
@@ -55,6 +57,10 @@ canonicalizePath' path = removeDotDirs <$> makeAbsolute path
 safeRemoveGlob :: FilePath -> String -> IO ()
 safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile globString) directory
   where safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
+
+-- Remove a directory recursively without complaining if it exists or not:
+safeRemoveDirectoryRecursive :: FilePath -> IO ()
+safeRemoveDirectoryRecursive dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive dir) (\_ -> return())
 
 -- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation
 -- if a "False" is found. This helps prevent infinite loops if dependencies are circular.

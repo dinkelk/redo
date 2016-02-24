@@ -8,19 +8,18 @@ module Database(redoMetaDir, initializeMetaDepsDir, isSourceFile, storeIfChangeD
                 MetaDir(..), LockFile(..), doesTargetExist) where
 
 import Control.Applicative ((<$>),(<*>))
-import Control.Exception (catchJust, catch, SomeException(..))
-import Control.Monad (guard, liftM, filterM)
+import Control.Exception (catch, SomeException(..))
+import Control.Monad (liftM, filterM)
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
 import Data.Maybe (isNothing, fromJust, listToMaybe)
-import System.Directory (removeDirectoryRecursive, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (takeExtensions, takeExtension, dropExtension, dropExtensions, isDrive, normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), takeDirectory, isPathSeparator, pathSeparator, takeExtension)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
 import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSize)
-import System.IO.Error (isDoesNotExistError)
 
 import PrettyPrint
 import Helpers
@@ -577,7 +576,7 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 -- Functions acting on MetaDir
 ---------------------------------------------------------------------
 removeMetaDir :: MetaDir -> IO ()
-removeMetaDir dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive $ unMetaDir dir) (\_ -> return())
+removeMetaDir dir = safeRemoveDirectoryRecursive $ unMetaDir dir
 
 createMetaDir :: MetaDir -> IO ()
 createMetaDir dir = createDirectoryIfMissing True (unMetaDir dir)

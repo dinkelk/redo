@@ -129,7 +129,8 @@ runDoFile target doFile = do
   metaDir <- metaFileDir target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDir
   currentTimeStamp <- safeGetTargetTimeStamp target
-  whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp metaDir)
+  targetIsDirectory <- doesDirectoryExist $ unTarget target
+  whenTargetNotModified cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDir)
   where
     targetModifiedError :: IO ExitCode
     targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
@@ -138,8 +139,8 @@ runDoFile target doFile = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> DoFile -> Maybe Stamp -> MetaDir -> IO ExitCode
-runDoFile' target doFile currentTimeStamp depDir = do 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> Bool -> MetaDir -> IO ExitCode
+runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -201,22 +202,25 @@ runDoFile' target doFile currentTimeStamp depDir = do
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- fileSize tmpStdout
       newTimeStamp <- safeGetTargetTimeStamp target
-      targetIsDirectory <- doesDirectoryExist $ unTarget target
-      -- See if the user modified $1 directly. 
-      if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
+      targetIsStillDirectory <- doesDirectoryExist $ unTarget target
+      -- See if the user modified $1 directly... we don't care if the user modified a directory target however
+      if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then dollarOneModifiedError 
       else 
         if tmp3Exists then do
-          renameFileOrDir tmp3 target
+          safeRenameFileOrDir tmp3 target
           if stdoutExists && stdoutSize > 0 then wroteToStdoutError else return ExitSuccess
         else if stdoutExists then
+          -- If the user actually wrote data to standard out or built a directory on $1 then we just try to rename the file,
+          -- and we leave a directory written on $1 alone.
+          if stdoutSize > 0 || targetIsStillDirectory then safeRenameFile tmpStdout target >> return ExitSuccess
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
           -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
           -- target should be created. This is our way of denoting the file as correctly build! 
           -- Usually this target won't exist anyways, but it might exist in the case
           -- of a modified .do file that was generating something, and now is not! In this case we remove the 
           -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-          if stdoutSize > 0 || targetIsDirectory then renameFileOrDir tmpStdout target >> return ExitSuccess
-          -- a stdout file size of 0 was created. This is the default
+          ------------------------------------------------------------------------------------------------------
+          -- Note: in this case a stdout file size of 0 was created. This is the default
           -- behavior on some systems for ">"-ing a file that generatetes
           -- no stdout. In this case, lets not clutter the directory, and
           -- instead store a phony target in the meta directory
@@ -225,9 +229,12 @@ runDoFile' target doFile currentTimeStamp depDir = do
                   return ExitSuccess
         -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
         else storePhonyTarget depDir >> return ExitSuccess
-      where renameFileOrDir :: FilePath -> Target -> IO () 
-            renameFileOrDir old new = catch(renameFile old (unTarget new)) 
-              (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> return ()))
+      where safeRenameFile :: FilePath -> Target -> IO ()
+            safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
+            safeRenameFileOrDir :: FilePath -> Target -> IO () 
+            safeRenameFileOrDir old new = catch(renameFile old (unTarget new)) 
+              (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new) -- we need to remove the directory because renameDirectory does not overwrite on all platforms
+                                                 renameDirectory old (unTarget new) ) (\(_ :: SomeException) -> return ()))
     
     wroteToStdoutError :: IO ExitCode
     wroteToStdoutError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
