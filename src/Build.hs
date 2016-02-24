@@ -10,14 +10,13 @@ import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
-import System.Directory (doesDirectoryExist, setCurrentDirectory, renameFile, renameDirectory, removeFile, doesFileExist, getCurrentDirectory)
+import System.Directory (removeDirectoryRecursive, doesDirectoryExist, setCurrentDirectory, renameFile, renameDirectory, removeFile, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
-import Data.Bool (bool)
 
 -- Local imports:
 import Database
@@ -111,11 +110,11 @@ buildTargets buildFunc targets = do
 
 -- Run a do file in the do file directory on the given target:
 build :: Target -> DoFile -> IO ExitCode
-build target doFile = performActionInDir' (takeDirectory $ unDoFile doFile) (runDoFile target) doFile
+build target doFile = performActionInDir (takeDirectory $ unDoFile doFile) (runDoFile target) doFile
 
--- TODO cleanup
-performActionInDir' :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
-performActionInDir' dir action target = do
+-- Run an action on a parameter and return an exit code within a certain directory
+performActionInDir :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
+performActionInDir dir action target = do
   topDir <- getCurrentDirectory
   catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
     putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
@@ -200,37 +199,35 @@ runDoFile' target doFile currentTimeStamp depDir = do
     moveTempFiles = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
-      targetIsDirectory <- doesDirectoryExist $ unTarget target
+      stdoutSize <- fileSize tmpStdout
       newTimeStamp <- safeGetTargetTimeStamp target
-      if tmp3Exists then
-        if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
-        else do
+      targetIsDirectory <- doesDirectoryExist $ unTarget target
+      -- See if the user modified $1 directly. 
+      if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
+      else 
+        if tmp3Exists then do
           renameFileOrDir tmp3 target
-          size <- fileSize tmpStdout
-          if stdoutExists && size > 0 then wroteToStdoutError else return ExitSuccess
-      else if stdoutExists then
-        if currentTimeStamp /= newTimeStamp && not targetIsDirectory then dollarOneModifiedError 
-        else do
-          size <- fileSize tmpStdout
+          if stdoutExists && stdoutSize > 0 then wroteToStdoutError else return ExitSuccess
+        else if stdoutExists then
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
           -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
           -- target should be created. This is our way of denoting the file as correctly build! 
           -- Usually this target won't exist anyways, but it might exist in the case
           -- of a modified .do file that was generating something, and now is not! In this case we remove the 
           -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-          if size > 0 then renameFileOrDir tmpStdout target >> return ExitSuccess
-                      -- a stdout file size of 0 was created. This is the default
-                      -- behavior on some systems for ">"-ing a file that generatetes
-                      -- no stdout. In this case, lets not clutter the directory, and
-                      -- instead store a phony target in the meta directory
-                      else do safeRemoveFile $ unTarget target
-                              storePhonyTarget depDir
-                              return ExitSuccess
-      -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
-      else storePhonyTarget depDir >> return ExitSuccess
+          if stdoutSize > 0 || targetIsDirectory then renameFileOrDir tmpStdout target >> return ExitSuccess
+          -- a stdout file size of 0 was created. This is the default
+          -- behavior on some systems for ">"-ing a file that generatetes
+          -- no stdout. In this case, lets not clutter the directory, and
+          -- instead store a phony target in the meta directory
+          else do safeRemoveTempFile $ unTarget target
+                  storePhonyTarget depDir
+                  return ExitSuccess
+        -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
+        else storePhonyTarget depDir >> return ExitSuccess
       where renameFileOrDir :: FilePath -> Target -> IO () 
             renameFileOrDir old new = catch(renameFile old (unTarget new)) 
-              (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> storePhonyTarget depDir))
+              (\(_ :: SomeException) -> catch(renameDirectory old (unTarget new)) (\(_ :: SomeException) -> return ()))
     
     wroteToStdoutError :: IO ExitCode
     wroteToStdoutError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
@@ -285,12 +282,13 @@ tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this t
 
 -- Remove the temporary files created for a target:
 removeTempFiles :: Target -> IO ()
-removeTempFiles target = do safeRemoveFile $ tmp3File target
-                            safeRemoveFile $ tmpStdoutFile target
+removeTempFiles target = do safeRemoveTempFile $ tmp3File target
+                            safeRemoveTempFile $ tmpStdoutFile target
                      
 -- Function to check if file exists, and if it does, remove it:
-safeRemoveFile :: FilePath -> IO ()
-safeRemoveFile file = bool (return ()) (removeFile file) =<< doesFileExist file
+safeRemoveTempFile :: FilePath -> IO ()
+safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> removeDir)
+  where removeDir = catch (removeDirectoryRecursive file) (\(_ :: SomeException) -> return ())
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
