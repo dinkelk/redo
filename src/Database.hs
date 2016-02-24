@@ -316,22 +316,18 @@ findDoFile :: Target -> IO (Maybe DoFile)
 findDoFile absTarget = do 
   let (targetDir, targetName) = splitFileName $ unTarget absTarget
   let targetDo = DoFile $ removeDotDirs $ unTarget absTarget ++ ".do" 
-  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesFileExist (unDoFile targetDo)
+  bool (defaultDoPath targetDir targetName) (return $ Just targetDo) =<< doesDoFileExist targetDo
   where
     -- Try to find matching .do file by checking directories upwards of "." until a suitable match is 
     -- found or "/" is reached.
     defaultDoPath :: FilePath -> FilePath -> IO (Maybe DoFile)
     defaultDoPath absPath' name = do
       let absPath = if last absPath' == pathSeparator then takeDirectory absPath' else absPath'
-      doFile <- listToMaybe `liftM` filterM doesFileExist (candidates absPath name)
+      doFile <- listToMaybe `liftM` filterM doesDoFileExist (candidates absPath name)
       if isNothing doFile && not (isDrive absPath) then defaultDoPath (takeDirectory absPath) name
-      else returnDoFile doFile
-    -- Return nothing or return the properly wrapped do file path:
-    returnDoFile :: Maybe FilePath -> IO (Maybe DoFile)
-    returnDoFile doFile = if isNothing doFile then return Nothing
-                          else return $ Just $ DoFile $ fromJust doFile
+      else return doFile
     -- List the possible default.do file candidates relative to the given path:
-    candidates path name = map (path </>) (defaults name)
+    candidates path name = map DoFile $ map (path </>) (defaults name)
     defaults name = map (++ ".do") (getDefaultDo $ "default" ++ takeExtensions name)
     -- Form all possible matching default.do files in order of preference:
     getDefaultDo :: FilePath -> [FilePath]
@@ -577,19 +573,9 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
     hasDependencies :: Target -> IO Bool
     hasDependencies t = doesMetaDirExist =<< metaFileDir t
   
-doesTargetExist :: Target -> IO Bool
-doesTargetExist target = (||) <$> doesFileExist filePath <*> doesDirectoryExist filePath
-  where filePath = unTarget target
-
 ---------------------------------------------------------------------
 -- Functions acting on MetaDir
 ---------------------------------------------------------------------
-doesMetaDirExist :: MetaDir -> IO Bool
-doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
-
-doesMetaFileExist :: MetaFile -> IO Bool
-doesMetaFileExist metaFile = doesFileExist $ unMetaFile metaFile
-
 removeMetaDir :: MetaDir -> IO ()
 removeMetaDir dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive $ unMetaDir dir) (\_ -> return())
 
@@ -599,3 +585,19 @@ createMetaDir dir = createDirectoryIfMissing True (unMetaDir dir)
 getMetaDirContents :: MetaDir -> IO [MetaFile]
 getMetaDirContents dir = do contents <- getDirectoryContents $ unMetaDir dir
                             return $ map MetaFile contents
+
+---------------------------------------------------------------------
+-- Existance functions:
+---------------------------------------------------------------------
+doesTargetExist :: Target -> IO Bool
+doesTargetExist target = (||) <$> doesFileExist filePath <*> doesDirectoryExist filePath
+  where filePath = unTarget target
+
+doesMetaDirExist :: MetaDir -> IO Bool
+doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
+
+doesMetaFileExist :: MetaFile -> IO Bool
+doesMetaFileExist metaFile = doesFileExist $ unMetaFile metaFile
+
+doesDoFileExist :: DoFile -> IO Bool
+doesDoFileExist doFile = doesFileExist $ unDoFile doFile 
