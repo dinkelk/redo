@@ -255,7 +255,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do
 shellCmd :: String -> DoFile -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote $ arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile target]
+  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 

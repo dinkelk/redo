@@ -168,12 +168,12 @@ storePhonyTarget :: MetaDir -> IO ()
 storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
 
 markTargetClean :: MetaDir -> IO ()
-markTargetClean metaDepsDir = do
+markTargetClean metaDepsDir =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
   createEmptyMetaFile =<< cleanFile metaDepsDir
 
 markTargetDirty :: MetaDir -> IO ()
-markTargetDirty metaDepsDir = do
+markTargetDirty metaDepsDir =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
   createEmptyMetaFile =<< dirtyFile metaDepsDir
 
