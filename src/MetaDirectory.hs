@@ -14,7 +14,7 @@ import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (createDirectory, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), isPathSeparator, pathSeparator)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
@@ -117,7 +117,8 @@ doesMetaDirExist :: MetaDir -> IO Bool
 doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
 
 doesMetaFileExist :: MetaFile -> IO Bool
-doesMetaFileExist metaFile = doesFileExist $ unMetaFile metaFile
+doesMetaFileExist metaFile = bool (doesDirectoryExist mFile) (return True) =<< doesFileExist mFile
+  where mFile = unMetaFile metaFile
 
 ---------------------------------------------------------------------
 -- Functions writing meta files:
@@ -138,16 +139,21 @@ storeStampFile :: MetaDir -> Target -> Target -> IO ()
 storeStampFile metaDepsDir depName depToStamp = writeMetaFile theMetaFile =<< getStamp depToStamp
   where theMetaFile = ifChangeMetaFile metaDepsDir depName
 
--- Creation of an empty dep file for redo-always and redo-ifcreate
--- note may need to make specific one for redoifcreate and redoalways
+-- Creation of an empty dep file:
 createEmptyMetaFile :: MetaFile -> IO ()
-createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
+--createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
+-- Note: I am creating a directory instead because it is faster than writing a single byte to a file
+createEmptyMetaFile file = catch (createDirectory $ unMetaFile file) (\(_ :: SomeException) -> return ())
+
+-- Write jibberish to a meta file so that it always compares bad:
+storeBadMetaFile :: MetaFile -> IO ()
+storeBadMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
 
 -- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
 -- because the target still depenends on this target, it just failed to built last time, so we store a
 -- blank (bad) stamp that will never match a successfully built target
 storeIfChangeDep :: MetaDir -> Target -> IO ()
-storeIfChangeDep metaDepsDir dep = maybe (createEmptyMetaFile theMetaFile) (storeStampFile metaDepsDir dep) =<< getBuiltTargetPath' dep
+storeIfChangeDep metaDepsDir dep = maybe (storeBadMetaFile theMetaFile) (storeStampFile metaDepsDir dep) =<< getBuiltTargetPath' dep
   where theMetaFile = ifChangeMetaFile metaDepsDir dep
 
 -- Store the ifcreate dep only if the target doesn't exist right now
@@ -163,12 +169,12 @@ storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
 
 markTargetClean :: MetaDir -> IO ()
 markTargetClean metaDepsDir = do
-  removeSessionFiles metaDepsDir
+  --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
   createEmptyMetaFile =<< cleanFile metaDepsDir
 
 markTargetDirty :: MetaDir -> IO ()
 markTargetDirty metaDepsDir = do
-  removeSessionFiles metaDepsDir
+  --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
   createEmptyMetaFile =<< dirtyFile metaDepsDir
 
 markTargetBuilt :: Target -> MetaDir -> IO ()
@@ -235,13 +241,18 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 ---------------------------------------------------------------------
 -- Check for stored clean or dirty files in a meta dir.
 -- Remove dirty and clean files in a meta dir.
-removeSessionFiles :: MetaDir -> IO ()
-removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir' ".cln.*.cln." >> safeRemoveGlob metaDepsDir' ".drt.*.drt." 
-  where metaDepsDir' = unMetaDir metaDepsDir
+-- Optimization: running this function takes a long time. We don't have to run it, so I am no longer using it.
+-- Not running this means that session files will begin to build up in the meta directories. However, once
+-- a target is rebuilt, all old session files are removed anyways. If enough session files build up (think 1000s)
+-- then maybe running upToDate will be slower... but that is probably not the common case, so removing this function
+-- for now.
+-- removeSessionFiles :: MetaDir -> IO ()
+-- removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir' "*.cln." >> safeRemoveGlob metaDepsDir' "*.drt." 
+--   where metaDepsDir' = unMetaDir metaDepsDir
 
 removeLockFiles :: IO ()
 removeLockFiles = do dir <- redoMetaDir 
-                     safeRemoveGlob dir ".lck.*.lck."
+                     safeRemoveGlob dir "*.lck."
 
 ---------------------------------------------------------------------
 -- Functions creating meta file names

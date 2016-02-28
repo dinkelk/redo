@@ -25,6 +25,6 @@ executable redo-haskell
   main-is:             redo.hs
   -- other-modules:       
   other-extensions:    StandaloneDeriving, ScopedTypeVariables, CPP
-  build-depends:       base >=4.7 && <4.8, containers >=0.5 && <0.6, directory >=1.2.5 && <1.3, filepath >=1.3 && <1.4, process >=1.2 && <1.3, time >=1.4 && <1.5, bytestring >=0.10 && <0.11, unix >=2.7, cryptohash, hex, ansi-terminal, random >=1, filelock, Glob>=0.7.5
+  build-depends:       base >=4.7 && <4.8, containers >=0.5 && <0.6, directory >=1.2.5 && <1.3, filepath >=1.3 && <1.4, process >=1.4.2, time >=1.4 && <1.5, bytestring >=0.10 && <0.11, unix >=2.7, cryptohash, hex, ansi-terminal, random >=1, filelock, Glob>=0.7.5
   hs-source-dirs:      src
   default-language:    Haskell2010
