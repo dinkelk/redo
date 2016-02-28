@@ -1,1 +1,1 @@
-rm a a.log
+rm -f a a.log
