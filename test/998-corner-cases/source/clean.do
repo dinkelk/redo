@@ -1,0 +1,1 @@
+rm a a.log
