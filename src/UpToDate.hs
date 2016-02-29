@@ -72,7 +72,7 @@ upToDate' level target depDir key = do
       let doFileDir = takeDirectory $ unDoFile absDoFile
       -- If all of the dependencies are up to date then this target is also up to date, so mark it
       -- as such and return true. Else, return false.
-      depsClean <- depsUpToDate (level+1) target depDir doFileDir 
+      depsClean <- depsUpToDate (level+1) target depDir doFileDir key
       if depsClean then returnTrue key -- `debug'` "+deps clean"
       else returnFalse key -- `debug'` "-deps dirty "
   where 
@@ -89,10 +89,11 @@ upToDate' level target depDir key = do
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
-depsUpToDate :: Int -> Target -> MetaDir -> FilePath ->  IO Bool
-depsUpToDate level target metaDepsDir doFileDir = do
-  (ifChangeDeps, ifCreateDeps, ifAlwaysDeps) <- getMetaDirDependencies metaDepsDir
-  if not $ null ifAlwaysDeps then return False `debug'` "-dep always"
+depsUpToDate :: Int -> Target -> MetaDir -> FilePath -> Key -> IO Bool
+depsUpToDate level target metaDepsDir doFileDir key = do
+  (ifChangeDeps, ifCreateDeps, _) <- getMetaDirDependencies metaDepsDir
+  alwaysDeps <- hasAlwaysDep key
+  if alwaysDeps then return False `debug'` "-dep always"
   else do 
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     depCreated' <- mapOr (doesTargetExist . ifCreateMetaFileToTarget doFileDir) ifCreateDeps

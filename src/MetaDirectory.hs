@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, storePhonyTarget, createLockFile, markTargetClean, 
+                     storeAlwaysDependency, hasAlwaysDep, storePhonyTarget, createLockFile, markTargetClean, 
                      markTargetDirty, storeStamp, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
                      isTargetMarkedClean, readMetaFile, getCachedDoFile, getMetaDirDependencies, removeMetaDir,
@@ -296,8 +296,17 @@ storeIfCreateDep :: MetaDir -> Target -> IO ()
 storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) 
   (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
 
-storeAlwaysDep :: MetaDir -> IO ()
-storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
+--storeAlwaysDep :: MetaDir -> IO ()
+--storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
+
+storeAlwaysDep :: Key -> IO () 
+storeAlwaysDep key = do
+  alwaysDir <- getAlwaysDirectory key
+  safeCreateDirectoryRecursive alwaysDir
+
+hasAlwaysDep :: Key -> IO Bool
+hasAlwaysDep key = doesDirectoryExist =<< getAlwaysDirectory key
+
 
 --storePhonyTarget :: MetaDir -> IO () 
 --storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
@@ -551,8 +560,10 @@ getRedoEnv = do
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
 storeAlwaysDependency = do 
-  (_, parentRedoMetaDir) <- getRedoEnv
-  storeAlwaysDep parentRedoMetaDir
+  parentRedoTarget <- getEnv "REDO_TARGET"
+  -- TODO: consider storing the key in the variable...
+  key <- getKey $ Target parentRedoTarget
+  storeAlwaysDep key
 
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
