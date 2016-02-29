@@ -187,7 +187,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do
                       markTargetClean key -- we just built this target, so we know it is clean now
                       -- If the target exists, then mark the target built with its timestamp
                       targetExists <- doesTargetExist target
-                      when targetExists (markTargetBuilt target depDir)
+                      when targetExists (storeStamp key target)
                       removeTempFiles target
                       return exitCode
     ExitFailure code -> do markTargetDirty key -- we failed to build this target, so mark it dirty
@@ -228,10 +228,10 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do
           -- no stdout. In this case, lets not clutter the directory, and
           -- instead store a phony target in the meta directory
           else do safeRemoveTempFile $ unTarget target
-                  storePhonyTarget depDir
+                  storePhonyTarget key
                   return ExitSuccess
         -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
-        else storePhonyTarget depDir >> return ExitSuccess
+        else storePhonyTarget key >> return ExitSuccess
       where safeRenameFile :: FilePath -> Target -> IO ()
             safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
             safeRenameFileOrDir :: FilePath -> Target -> IO () 

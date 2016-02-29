@@ -3,7 +3,7 @@
 
 module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
                      storeAlwaysDependency, storePhonyTarget, createLockFile, markTargetClean, 
-                     markTargetDirty, markTargetBuilt, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
+                     markTargetDirty, storeStamp, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
                      isTargetMarkedClean, readMetaFile, getCachedDoFile, getMetaDirDependencies, removeMetaDir,
                      isSourceFile, MetaDir(..), LockFile(..), MetaFile(..), Key(..), getKey) where
@@ -166,6 +166,12 @@ getStampDirectory key = do
   return $ dbDir </> "s"
 
 -- Get the database directory for a target's always dependencies:
+getPhonyTargetDirectory :: Key -> IO FilePath
+getPhonyTargetDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "p"
+
+-- Get the database directory for a target's always dependencies:
 getDoFileDirectory :: Key -> IO FilePath
 getDoFileDirectory key = do
   dbDir <- getDatabaseDirectory key
@@ -293,8 +299,13 @@ storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile 
 storeAlwaysDep :: MetaDir -> IO ()
 storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
 
-storePhonyTarget :: MetaDir -> IO () 
-storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
+--storePhonyTarget :: MetaDir -> IO () 
+--storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
+
+storePhonyTarget :: Key -> IO () 
+storePhonyTarget key = do
+  phonyTargetDir <- getPhonyTargetDirectory key
+  writeMetaFile' phonyTargetDir (escapeDependencyPath '@' $ ".")
 
 markTargetClean :: Key -> IO ()
 markTargetClean key =
@@ -306,10 +317,10 @@ markTargetDirty key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
   createEmptyMetaFile =<< dirtyFile key
 
-markTargetBuilt :: Target -> MetaDir -> IO ()
-markTargetBuilt target metaDepsDir = do
-  timestamp <- getStamp target
-  writeMetaFile (builtFile metaDepsDir) timestamp
+--markTargetBuilt :: Target -> MetaDir -> IO ()
+--markTargetBuilt target metaDepsDir = do
+--  timestamp <- getStamp target
+--  writeMetaFile (builtFile metaDepsDir) timestamp
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
 -- TODO remove
@@ -320,6 +331,13 @@ cacheDoFile :: Key -> DoFile -> IO ()
 cacheDoFile key doFile = do
   doFileDir <- getDoFileDirectory key
   writeMetaFile' doFileDir (escapeDependencyPath '@' $ unDoFile doFile)
+
+storeStamp :: Key -> Target -> IO ()
+storeStamp key target = do
+  timestamp <- getStamp target
+  stampDir <- getStampDirectory key
+  -- TODO fix this the redundant unpack here
+  writeMetaFile' stampDir (escapeDependencyPath '@' $ BS.unpack $ unStamp timestamp)
 
 -- Return the lock file name for a target:
 -- TODO make this take a key
@@ -370,7 +388,11 @@ getCachedDoFile key = do
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing
 getBuiltTargetPath :: MetaDir -> Target -> IO(Maybe Target)
-getBuiltTargetPath metaDepsDir = returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyFile metaDepsDir))
+getBuiltTargetPath metaDepsDir target = do
+  -- TODO cleanup, this function should take a key
+  key <- getKey target
+  phonyF <- phonyFile key
+  returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyF)) target
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
         returnPhonyIfExists failFunc file = bool failFunc (return $ Just $ Target $ unMetaFile file) =<< doesMetaFileExist file
 
@@ -422,8 +444,14 @@ alwaysMetaFile :: MetaDir -> MetaFile
 alwaysMetaFile depDir = MetaFile $ unMetaDir depDir </> file
   where file = "." ++ [always_dependency_prepend] ++ "redo-always" ++ [always_dependency_prepend] ++ "."
 
-phonyFile :: MetaDir -> MetaFile
-phonyFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> "." ++ "phony-target" ++ "."
+--phonyFile :: MetaDir -> MetaFile
+--phonyFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> "." ++ "phony-target" ++ "."
+
+-- TODO remove
+phonyFile :: Key -> IO MetaFile
+phonyFile key = do
+  phonyTargetDir <- getPhonyTargetDirectory key
+  return $ MetaFile $ phonyTargetDir
 
 doFileCache :: MetaDir -> MetaFile  
 doFileCache metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".do.do."
