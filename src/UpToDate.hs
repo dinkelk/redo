@@ -19,6 +19,7 @@ import MetaDirectory
 upToDate :: Target -> IO Bool
 upToDate target = do
   depDir <- metaDir target
+  key <- getKey target
   return () `debug'` "=checking"
   hasMetaDeps <- doesMetaDirExist depDir
   targetExists <- doesTargetExist target
@@ -33,15 +34,15 @@ upToDate target = do
     (_, True) -> do
       existingTarget <- getBuiltTargetPath depDir target
       -- If neither a target or a phony target exists, then the target is obviously not up to date
-      if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
+      if isNothing existingTarget then returnFalse key `debug'` "-not built"
       else do
-        dirty <- isTargetMarkedDirty depDir
-        -- If we have already checked off this target as dirty, don't delay, return not up to date
-        if dirty then return False `debug'` "-dirty"
+        clean <- isTargetMarkedClean key  
+        -- If we have already checked off this target as up to date, there is no need to check again
+        if clean then return True `debug'` "+clean"
         else do
-          clean <- isTargetMarkedClean depDir
-          -- If we have already checked off this target as up to date, there is no need to check again
-          if clean then return True `debug'` "+clean"
+          dirty <- isTargetMarkedDirty key 
+          -- If we have already checked off this target as dirty, don't delay, return not up to date
+          if dirty then return False `debug'` "-dirty"
           else do 
             cachedTimeStamp <- getTargetBuiltTimeStamp depDir
             currentTimeStamp <- safeGetStamp target
@@ -49,13 +50,13 @@ upToDate target = do
               -- The target has been modified because the timestamps dont match
               (return False `debug'` "-modified") 
               -- the target hasn't been modified because the timestamps do match, or one of the timestamps is nothing
-              (upToDate' 0 target depDir)
+              (upToDate' 0 target depDir key)
   where
     -- Convenient debug function:
     debug' = debugUpToDate 0 target
     
-upToDate' :: Int -> Target -> MetaDir -> IO Bool
-upToDate' level target depDir = do
+upToDate' :: Int -> Target -> MetaDir -> Key -> IO Bool
+upToDate' level target depDir key = do
   doFile <- findDoFile target
   -- If no do file is found, but the meta dir exists, than this file used to be buildable, but is
   -- now a newly marked source file. So remove the meta dir but return false to be conservative. 
@@ -66,14 +67,14 @@ upToDate' level target depDir = do
     newDo <- newDoFile depDir absDoFile
     -- If the target exists but a new do file was found for it then we need to rebuilt it, so
     -- it is not up to date.
-    if newDo then returnFalse depDir `debug'` "-new .do"
+    if newDo then returnFalse key `debug'` "-new .do"
     else do
       let doFileDir = takeDirectory $ unDoFile absDoFile
       -- If all of the dependencies are up to date then this target is also up to date, so mark it
       -- as such and return true. Else, return false.
       depsClean <- depsUpToDate (level+1) target depDir doFileDir 
-      if depsClean then returnTrue depDir -- `debug'` "+deps clean"
-      else returnFalse depDir -- `debug'` "-deps dirty "
+      if depsClean then returnTrue key -- `debug'` "+deps clean"
+      else returnFalse key -- `debug'` "-deps dirty "
   where 
     debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
@@ -109,6 +110,7 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
   return () `debug'` "=checking"
   hasMetaDeps <- doesMetaDirExist depDir
   targetExists <- doesTargetExist dep
+  depKey <- getKey dep
   case (targetExists, hasMetaDeps) of 
     -- If no meta data for this target is stored and it doesn't exist than it has never been built
     (False, False) -> return False `debug'` "-never built"
@@ -122,22 +124,22 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
     (_, True) -> do
       existingTarget <- getBuiltTargetPath depDir dep
       -- If neither a target or a phony target exists, then the target is obviously not up to date
-      if isNothing existingTarget then returnFalse depDir `debug'` "-not built"
+      if isNothing existingTarget then returnFalse depKey `debug'` "-not built"
       else do
-        dirty <- isTargetMarkedDirty depDir
-        -- If we have already checked off this target as dirty, don't delay, return not up to date
-        if dirty then return False `debug'` "-dirty"
-        else do
-          clean <- isTargetMarkedClean depDir
-          -- If we have already checked off this target as up to date, there is no need to check again
-          if clean then return True `debug'` "+clean"
-          else do 
+        clean <- isTargetMarkedClean depKey
+        -- If we have already checked off this target as up to date, there is no need to check again
+        if clean then return True `debug'` "+clean"
+        else do 
+          dirty <- isTargetMarkedDirty depKey 
+          -- If we have already checked off this target as dirty, don't delay, return not up to date
+          if dirty then return False `debug'` "-dirty"
+          else do
             cachedTimeStamp <- getTargetBuiltTimeStamp depDir
             currentTimeStamp <- safeGetStamp dep
             whenEqualOrNothing cachedTimeStamp currentTimeStamp (return False `debug'` "-modified") (do
               -- Check the target against it's stored hash
               hashesMatch <- compareStamp hashFullPath (fromJust existingTarget)
-              if hashesMatch then upToDate' level dep depDir
+              if hashesMatch then upToDate' level dep depDir depKey
               else return False `debug'` "-dep changed")
   where
     debug' = debugUpToDate level dep
@@ -151,11 +153,11 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
       return $ oldStamp == newStamp
 
 -- Helper function which returns true and marks the target as clean:
-returnTrue :: MetaDir -> IO Bool
-returnTrue metaDepsDir = markTargetClean metaDepsDir >> return True
+returnTrue :: Key -> IO Bool
+returnTrue key = markTargetClean key >> return True
 -- Helper function which returns false and marks the target as dirty:
-returnFalse :: MetaDir -> IO Bool
-returnFalse metaDepsDir = markTargetDirty metaDepsDir >> return False
+returnFalse :: Key -> IO Bool
+returnFalse key = markTargetDirty key >> return False
 
 -- Helper for debugging:
 debugUpToDate :: Int -> Target -> c -> String -> c

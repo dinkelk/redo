@@ -129,10 +129,11 @@ performActionInDir dir action target = do
 runDoFile :: Target -> DoFile -> IO ExitCode
 runDoFile target doFile = do 
   metaDepsDir <- metaDir target
+  key <- getKey target
   cachedTimeStamp <- getTargetBuiltTimeStamp metaDepsDir
   currentTimeStamp <- safeGetStamp target
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-  whenEqualOrNothing cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDepsDir)
+  whenEqualOrNothing cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDepsDir key)
   where
     targetModifiedError :: IO ExitCode
     targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
@@ -141,8 +142,8 @@ runDoFile target doFile = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> DoFile -> Maybe Stamp -> Bool -> MetaDir -> IO ExitCode
-runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> Bool -> MetaDir -> Key -> IO ExitCode
+runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -183,13 +184,13 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> do exitCode <- moveTempFiles 
-                      markTargetClean depDir -- we just built this target, so we know it is clean now
+                      markTargetClean key -- we just built this target, so we know it is clean now
                       -- If the target exists, then mark the target built with its timestamp
                       targetExists <- doesTargetExist target
                       when targetExists (markTargetBuilt target depDir)
                       removeTempFiles target
                       return exitCode
-    ExitFailure code -> do markTargetDirty depDir -- we failed to build this target, so mark it dirty
+    ExitFailure code -> do markTargetDirty key -- we failed to build this target, so mark it dirty
                            removeTempFiles target
                            redoError code $ nonZeroExitStr code
   where

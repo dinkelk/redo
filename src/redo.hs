@@ -88,7 +88,7 @@ main = do
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
   -- Create a the meta directory if it doesn't exist yet:
-  metaRootDir <- redoMetaDir
+  metaRootDir <- redoMetaDirectory
   createDirectoryIfMissing True metaRootDir
 
   -- Run the main:
@@ -109,12 +109,14 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
-  -- Remove any old lock files, the don't mean anything for this build
-  removeLockFiles
+  -- Remove old lock files and other cached files:
+  clearLockFiles
+  clearRedoCache
 
   -- Set a unique session number for this session:
-  sessionNumber <- randomRIO (0, 1000000000000::Int)
-  setEnv "REDO_SESSION" (show sessionNumber)
+  -- TODO remove
+  --sessionNumber <- randomRIO (0, 1000000000000::Int)
+  --setEnv "REDO_SESSION" (show sessionNumber)
 
   -- Perform the proper action based on the program name:
   case progName of 

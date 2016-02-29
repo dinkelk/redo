@@ -1,5 +1,3 @@
 #!/bin/sh
 echo "Flushing redo cache..." >&2
-find ~/.redo -name ".cln.*.cln." | xargs rm -rf
-find ~/.redo -name ".drt.*.drt." | xargs rm -rf
-find ~/.redo -name ".blt.blt." | xargs rm -rf
+rm -rf ~/.redo/cache

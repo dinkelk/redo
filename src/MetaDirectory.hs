@@ -1,12 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module MetaDirectory(redoMetaDir, initializeMetaDepsDir, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, storePhonyTarget, createLockFile, removeLockFiles, markTargetClean, 
+module MetaDirectory(clearRedoCache, clearLockFiles, redoMetaDirectory, initializeMetaDepsDir, storeIfChangeDependencies, storeIfCreateDependencies, 
+                     storeAlwaysDependency, storePhonyTarget, createLockFile, markTargetClean, 
                      markTargetDirty, markTargetBuilt, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
                      isTargetMarkedClean, readMetaFile, getCachedDoFile, getMetaDirDependencies, removeMetaDir,
-                     isSourceFile, MetaDir(..), LockFile(..), MetaFile(..)) where
+                     isSourceFile, MetaDir(..), LockFile(..), MetaFile(..), Key(..), getKey) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
@@ -26,6 +26,7 @@ import Types
 ---------------------------------------------------------------------
 -- Type Definitions:
 ---------------------------------------------------------------------
+newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The data base key for a target
 newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq) -- The meta directory associated with a target
 newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
@@ -49,13 +50,57 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- 
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
 -- Directory for storing and fetching data on dependencies of redo targets.
-redoMetaDir :: IO FilePath
-redoMetaDir = getAppUserDataDirectory "redo"
+redoMetaDirectory :: IO FilePath
+redoMetaDirectory = getAppUserDataDirectory "redo"
+
+-- Directory for storing single redo session cached information. This speeds up
+-- the upToDate function
+redoCacheDirectory :: IO FilePath
+redoCacheDirectory = do
+  root <- redoMetaDirectory
+  return $ root </> "cache"
+
+-- Directory for storing single redo session cached information. This speeds up
+-- the upToDate function
+redoLockFileDirectory :: IO FilePath
+redoLockFileDirectory = do
+  root <- redoMetaDirectory
+  return $ root </> "locks"
+
+-- Clear the entire redo cache directory:
+clearRedoCache :: IO ()
+clearRedoCache = safeRemoveDirectoryRecursive =<< redoCacheDirectory
+
+-- Clear the entire redo cache directory:
+clearLockFiles :: IO ()
+clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
+
+-- Get the database for a given target:
+getKey :: Target -> IO Key
+getKey target = do
+  hashedTarget <- hashString target
+  return $ Key $ pathify hashedTarget
+  where 
+    pathify "" = ""
+    pathify string = x </> pathify xs
+      where (x,xs) = splitAt 2 string
+
+-- Get the cache directory for a target:
+getCacheDirectory :: Key -> IO FilePath
+getCacheDirectory key = do
+  cacheDir <- redoCacheDirectory
+  return $ cacheDir </> keyToFilePath key
+
+-- Get the lock file directory for a target:
+getLockFileDirectory :: Key -> IO FilePath
+getLockFileDirectory key = do
+  lockFileDir <- redoLockFileDirectory
+  return $ lockFileDir </> keyToFilePath key
 
 -- Form the hash directory where a target's dependency hashes will be stored given the target
 metaDir :: Target -> IO MetaDir
 metaDir target = do
-  metaRoot <- redoMetaDir 
+  metaRoot <- redoMetaDirectory 
   hashedTarget <- hashString target
   return $ MetaDir $ metaRoot </> pathify hashedTarget
   where 
@@ -116,6 +161,7 @@ getMetaDirDependencies dir = do
 doesMetaDirExist :: MetaDir -> IO Bool
 doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
 
+-- TODO: make this only check directories since that is all we are storing now
 doesMetaFileExist :: MetaFile -> IO Bool
 doesMetaFileExist metaFile = bool (doesDirectoryExist mFile) (return True) =<< doesFileExist mFile
   where mFile = unMetaFile metaFile
@@ -143,7 +189,8 @@ storeStampFile metaDepsDir depName depToStamp = writeMetaFile theMetaFile =<< ge
 createEmptyMetaFile :: MetaFile -> IO ()
 --createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
 -- Note: I am creating a directory instead because it is faster than writing a single byte to a file
-createEmptyMetaFile file = catch (createDirectory $ unMetaFile file) (\(_ :: SomeException) -> return ())
+--createEmptyMetaFile file = catch (createDirectory $ unMetaFile file) (\(_ :: SomeException) -> return ())
+createEmptyMetaFile file = createDirectoryIfMissing True (unMetaFile file)
 
 -- Write jibberish to a meta file so that it always compares bad:
 storeBadMetaFile :: MetaFile -> IO ()
@@ -167,15 +214,15 @@ storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
 storePhonyTarget :: MetaDir -> IO () 
 storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
 
-markTargetClean :: MetaDir -> IO ()
-markTargetClean metaDepsDir =
+markTargetClean :: Key -> IO ()
+markTargetClean key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
-  createEmptyMetaFile =<< cleanFile metaDepsDir
+  createEmptyMetaFile =<< cleanFile key
 
-markTargetDirty :: MetaDir -> IO ()
-markTargetDirty metaDepsDir =
+markTargetDirty :: Key -> IO ()
+markTargetDirty key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
-  createEmptyMetaFile =<< dirtyFile metaDepsDir
+  createEmptyMetaFile =<< dirtyFile key
 
 markTargetBuilt :: Target -> MetaDir -> IO ()
 markTargetBuilt target metaDepsDir = do
@@ -187,10 +234,18 @@ cacheDoFile :: MetaDir -> DoFile -> IO ()
 cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir) (unDoFile doFile)
 
 -- Return the lock file name for a target:
+-- TODO make this take a key
 createLockFile :: Target -> IO LockFile
-createLockFile target = do dir <- redoMetaDir
-                           hashedTarget <- hashString target
-                           return $ LockFile $ dir </> ".lck." ++ hashedTarget ++ ".lck."
+createLockFile target = do
+  key <- getKey target
+  createLockFile' key
+
+createLockFile' :: Key -> IO LockFile
+createLockFile' key = do 
+  lockFileDir <- getLockFileDirectory key
+  -- TODO cleanup:
+  createDirectoryIfMissing True lockFileDir 
+  return $ LockFile $ lockFileDir </> "l"
 
 ---------------------------------------------------------------------
 -- Functions reading meta files:
@@ -203,11 +258,11 @@ getTargetBuiltTimeStamp :: MetaDir -> IO (Maybe Stamp)
 getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> readMetaFile (builtFile metaDepsDir)) 
   (\(_ :: SomeException) -> return Nothing)
 
-isTargetMarkedClean :: MetaDir -> IO Bool 
-isTargetMarkedClean metaDepsDir = doesMetaFileExist =<< cleanFile metaDepsDir
+isTargetMarkedClean :: Key -> IO Bool 
+isTargetMarkedClean key = doesMetaFileExist =<< cleanFile key
 
-isTargetMarkedDirty :: MetaDir -> IO Bool 
-isTargetMarkedDirty metaDepsDir = doesMetaFileExist =<< dirtyFile metaDepsDir
+isTargetMarkedDirty :: Key -> IO Bool 
+isTargetMarkedDirty key = doesMetaFileExist =<< dirtyFile key
 
 -- Retrieve the cached do file path inside meta dir
 getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
@@ -250,9 +305,10 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
 -- removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir' "*.cln." >> safeRemoveGlob metaDepsDir' "*.drt." 
 --   where metaDepsDir' = unMetaDir metaDepsDir
 
-removeLockFiles :: IO ()
-removeLockFiles = do dir <- redoMetaDir 
-                     safeRemoveGlob dir "*.lck."
+-- TODO remove
+--removeLockFiles :: IO ()
+--removeLockFiles = do dir <- redoMetaDirectory 
+--                     safeRemoveGlob dir "*.lck."
 
 ---------------------------------------------------------------------
 -- Functions creating meta file names
@@ -276,13 +332,23 @@ phonyFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> "." ++ "phony-targe
 doFileCache :: MetaDir -> MetaFile  
 doFileCache metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".do.do."
 
-cleanFile :: MetaDir -> IO MetaFile  
-cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
-  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".cln." ++ session  ++ ".cln."
+--cleanFile :: MetaDir -> IO MetaFile  
+--cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
+--  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".cln." ++ session  ++ ".cln."
 
-dirtyFile :: MetaDir -> IO MetaFile 
-dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
-  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".drt." ++ session  ++ ".drt."
+cleanFile :: Key -> IO MetaFile  
+cleanFile key = do
+  cacheDir <- getCacheDirectory key
+  return $ MetaFile $ cacheDir </> "c"
+
+dirtyFile :: Key -> IO MetaFile  
+dirtyFile key = do
+  cacheDir <- getCacheDirectory key
+  return $ MetaFile $ cacheDir </> "d"
+
+--dirtyFile :: MetaDir -> IO MetaFile 
+--dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
+--  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".drt." ++ session  ++ ".drt."
 
 -- Construct file for storing built timestamp
 builtFile :: MetaDir -> MetaFile  
