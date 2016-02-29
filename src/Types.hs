@@ -18,7 +18,7 @@ import Helpers
 ---------------------------------------------------------------------
 -- Basic Redo Type Definitions:
 ---------------------------------------------------------------------
-newtype Stamp = Stamp { unStamp :: BS.ByteString } deriving (Show, Eq) -- Timestamp or hash stamp of a file
+newtype Stamp = Stamp { unStamp :: String } deriving (Show, Eq) -- Timestamp or hash stamp of a file
 newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Show, Eq) -- The absolute path to a do file
 newtype Target = Target { unTarget :: FilePath } deriving (Eq) -- The absolute path to a target file
 
@@ -38,7 +38,11 @@ safeGetStamp target = catch (Just <$> getStamp target) (\(_ :: SomeException) ->
 getTimeStamp :: Target -> IO Stamp
 getTimeStamp target = do
   st <- getFileStatus $ unTarget target
-  return $ Stamp $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
+  return $ Stamp $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
+--getTimeStamp :: Target -> IO Stamp
+--getTimeStamp target = do
+--  st <- getFileStatus $ unTarget target
+--  return $ Stamp $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
 
 -- Hash the file
 -- getTargetHashStamp :: Target -> IO Stamp

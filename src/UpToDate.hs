@@ -5,10 +5,12 @@ module UpToDate (upToDate) where
 
 import Data.Maybe (isNothing, fromJust)
 import System.FilePath ((</>), takeDirectory, takeExtension)
+import Control.Exception (catch, SomeException(..))
 
 import Helpers
 import Types
 import MetaDirectory
+import PrettyPrint
 
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
@@ -91,7 +93,8 @@ upToDate' level target depDir key = do
 -- dependencies to make sure the dependencies are up to date.
 depsUpToDate :: Int -> Target -> MetaDir -> FilePath -> Key -> IO Bool
 depsUpToDate level target metaDepsDir doFileDir key = do
-  (ifChangeDeps, _, _) <- getMetaDirDependencies metaDepsDir
+  -- TODO remove
+  --(ifChangeDeps, _, _) <- getMetaDirDependencies metaDepsDir
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"
   else do 
@@ -101,7 +104,11 @@ depsUpToDate level target metaDepsDir doFileDir key = do
     if depCreated' then return False `debug'` "-dep created"
     -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
     --                 then recursively check their dependencies to see if they are up to date
-    else mapAnd (ifChangeDepsUpToDate level metaDepsDir doFileDir) ifChangeDeps 
+    else do
+      -- TODO use this function soon
+      --ifChangeDeps <- getIfChangeDeps key
+      ifChangeDeps <- getIfChangeDeps'' key
+      mapAnd (ifChangeDepsUpToDate level metaDepsDir doFileDir) ifChangeDeps 
   where 
     debug' = debugUpToDate level target
 
@@ -145,14 +152,19 @@ ifChangeDepsUpToDate level parentMetaDir doDir hashFile = do
               else return False `debug'` "-dep changed")
   where
     debug' = debugUpToDate level dep
-    hashFullPath = MetaFile $ unMetaDir parentMetaDir </> unMetaFile hashFile
+    hashFullPath = MetaFile $ unMetaDir parentMetaDir </> "r" </> unMetaFile hashFile
     dep = ifChangeMetaFileToTarget doDir hashFile
     -- Check the hash of the dependency and compare it to the stored hash. This function provides recursion:
     compareStamp :: MetaFile -> Target -> IO Bool
     compareStamp storedStamp fileToStamp = do
-      oldStamp <- readMetaFile storedStamp
+      --oldStamp <- readMetaFile storedStamp
+      -- TODO fix this
+      oldStamp <- safeGetOldStamp
       newStamp <- getStamp fileToStamp
-      return $ oldStamp == newStamp
+      return $ (Stamp oldStamp) == newStamp
+        -- TODO i hope i can remove this      
+        where safeGetOldStamp = catch (do contents <- readMetaFile' $ unMetaFile storedStamp
+                                          return $ unEscapeDependencyPath '@' contents) (\(_ :: SomeException) -> return "")
 
 -- Helper function which returns true and marks the target as clean:
 returnTrue :: Key -> IO Bool

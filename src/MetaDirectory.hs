@@ -2,10 +2,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, storePhonyTarget, createLockFile, markTargetClean, 
+                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markTargetClean, unEscapeDependencyPath, 
                      markTargetDirty, storeStamp, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
-                     isTargetMarkedClean, readMetaFile, getCachedDoFile, getMetaDirDependencies, removeMetaDir,
+                     isTargetMarkedClean, readMetaFile, readMetaFile', getCachedDoFile, getMetaDirDependencies, removeMetaDir,
                      isSourceFile, MetaDir(..), LockFile(..), MetaFile(..), Key(..), getKey) where
 
 import Control.Applicative ((<$>))
@@ -89,7 +89,7 @@ initializeDatabase key metaDepsDir doFile = do
   clearDatabaseDirectory key
   createDatabaseDirectory key
   -- Write out .do script as dependency:
-  storeStampFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
+  storeIfChangeDep key (Target $ unDoFile doFile)
   -- Cache the do file:
   cacheDoFile key doFile
 
@@ -247,19 +247,28 @@ doesMetaFileExist metaFile = bool (doesDirectoryExist mFile) (return True) =<< d
 ---------------------------------------------------------------------
 -- Calculate the hash of a target's dependency and write it to the proper meta data location
 -- If the dependency doesn't exist, do not store a hash
+--writeMetaFile :: MetaFile -> Stamp -> IO ()
+--writeMetaFile file contents = catch
+--  ( BS.writeFile fileToWrite byteContents )
+--  (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
+--                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
+--                               exitFailure)
+--  where byteContents = unStamp contents
+--        fileToWrite = unMetaFile file
 writeMetaFile :: MetaFile -> Stamp -> IO ()
 writeMetaFile file contents = catch
-  ( BS.writeFile fileToWrite byteContents )
+  ( writeFile fileToWrite byteContents )
   (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
+                               putErrorStrLn $ "Error: Encountered problem writing '" ++ byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
                                exitFailure)
   where byteContents = unStamp contents
         fileToWrite = unMetaFile file
 
 -- Get the stamp of a target and store it in the meta directory
-storeStampFile :: MetaDir -> Target -> Target -> IO ()
-storeStampFile metaDepsDir depName depToStamp = writeMetaFile theMetaFile =<< getStamp depToStamp
-  where theMetaFile = ifChangeMetaFile metaDepsDir depName
+-- TODO: remove this function... we shouldn't need to do this once links are working
+--storeStampFile :: Key -> Target -> Target -> IO ()
+--storeStampFile key depName depToStamp = writeMetaFile' theMetaFile =<< getStamp depToStamp
+--  where theMetaFile = ifChangeMetaFile metaDepsDir depName
 
 -- Creation of an empty dep file:
 createEmptyMetaFile :: MetaFile -> IO ()
@@ -290,15 +299,30 @@ readMetaFile'' file = do
   return $ drop 2 contents
 
 -- Write jibberish to a meta file so that it always compares bad:
-storeBadMetaFile :: MetaFile -> IO ()
-storeBadMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
+--storeBadMetaFile :: FilePath -> IO ()
+--storeBadMetaFile file = writeMetaFile' file "@@"
 
 -- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
 -- because the target still depenends on this target, it just failed to built last time, so we store a
 -- blank (bad) stamp that will never match a successfully built target
-storeIfChangeDep :: MetaDir -> Target -> IO ()
-storeIfChangeDep metaDepsDir dep = maybe (storeBadMetaFile theMetaFile) (storeStampFile metaDepsDir dep) =<< getBuiltTargetPath' dep
-  where theMetaFile = ifChangeMetaFile metaDepsDir dep
+storeIfChangeDep :: Key -> Target -> IO ()
+storeIfChangeDep key dep = maybe (storeIfChangeDepBad' key dep) (storeIfChangeDep' key) =<< getBuiltTargetPath' dep
+
+--storeIfChangeDep :: MetaDir -> Target -> IO ()
+--storeIfChangeDep metaDepsDir dep = maybe (storeBadMetaFile theMetaFile) (storeStampFile metaDepsDir dep) =<< getBuiltTargetPath' dep
+--  where theMetaFile = ifChangeMetaFile metaDepsDir dep
+storeIfChangeDep' :: Key -> Target -> IO () 
+storeIfChangeDep' key target = do
+  -- TODO remove the stamping after links are in place...
+  stamp <- getStamp target
+  ifChangeDir <- getIfChangeDirectory key
+  appendMetaFile' (ifChangeDir </> (escapeDependencyPath '@' $ unTarget target)) (escapeDependencyPath '@' $ unStamp stamp)
+
+storeIfChangeDepBad' :: Key -> Target -> IO () 
+storeIfChangeDepBad' key target = do
+  -- TODO remove the stamping after links are in place...
+  ifChangeDir <- getIfChangeDirectory key
+  appendMetaFile' (ifChangeDir </> (escapeDependencyPath '@' $ unTarget target)) (escapeDependencyPath '@' $ "asdfasdf")
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 --storeIfCreateDep :: MetaDir -> Target -> IO ()
@@ -336,6 +360,26 @@ getIfCreateDeps key = do
                 return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
             (\(_ :: SomeException) -> return [])
 
+getIfChangeDeps :: Key -> IO [MetaFile]
+getIfChangeDeps key = do
+  ifChangeDir <- getIfChangeDirectory key
+  getIfChangeDeps' ifChangeDir
+  where 
+    getIfChangeDeps' dir = 
+      catch (do files <- readMetaFile'' dir
+                return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
+            (\(_ :: SomeException) -> return [])
+
+getIfChangeDeps'' :: Key -> IO [MetaFile]
+getIfChangeDeps'' key = do
+  ifChangeDir <- getIfChangeDirectory key
+  getIfChangeDeps' ifChangeDir
+  where 
+    getIfChangeDeps' dir = 
+      catch (do files <- readMetaFile'' dir
+                return $ map MetaFile files)
+            (\(_ :: SomeException) -> return [])
+
 --storePhonyTarget :: MetaDir -> IO () 
 --storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
 
@@ -344,6 +388,7 @@ storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetDirectory key
   writeMetaFile' phonyTargetDir (escapeDependencyPath '@' $ ".")
 
+-- TODO make these functions match the rest
 markTargetClean :: Key -> IO ()
 markTargetClean key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
@@ -371,10 +416,10 @@ cacheDoFile key doFile = do
 
 storeStamp :: Key -> Target -> IO ()
 storeStamp key target = do
-  timestamp <- getStamp target
+  stamp <- getStamp target
   stampDir <- getStampDirectory key
   -- TODO fix this the redundant unpack here
-  writeMetaFile' stampDir (escapeDependencyPath '@' $ BS.unpack $ unStamp timestamp)
+  writeMetaFile' stampDir (escapeDependencyPath '@' $ unStamp stamp)
 
 -- Return the lock file name for a target:
 -- TODO make this take a key
@@ -393,8 +438,10 @@ createLockFile' key = do
 ---------------------------------------------------------------------
 -- Functions reading meta files:
 ---------------------------------------------------------------------
+--readMetaFile :: MetaFile -> IO Stamp
+--readMetaFile file = Stamp <$> BS.readFile (unMetaFile file)
 readMetaFile :: MetaFile -> IO Stamp
-readMetaFile file = Stamp <$> BS.readFile (unMetaFile file)
+readMetaFile file = Stamp <$> readFile (unMetaFile file)
 
 -- Get the cached timestamp for when a target was last built. Return '.'
 getTargetBuiltTimeStamp :: MetaDir -> IO (Maybe Stamp)
@@ -571,7 +618,7 @@ unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 ---------------------------------------------------------------------
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [Target] -> IO ()
-storeIfChangeDependencies = storeDependencies' storeIfChangeDep
+storeIfChangeDependencies = storeDependencies storeIfChangeDep
 
 -- Store dependencies for redo-ifcreate:
 storeIfCreateDependencies :: [Target] -> IO ()
