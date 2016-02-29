@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module MetaDirectory(clearRedoCache, clearLockFiles, redoMetaDirectory, initializeMetaDepsDir, storeIfChangeDependencies, storeIfCreateDependencies, 
+module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
                      storeAlwaysDependency, storePhonyTarget, createLockFile, markTargetClean, 
                      markTargetDirty, markTargetBuilt, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
@@ -14,7 +14,7 @@ import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import System.Directory (createDirectory, getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), isPathSeparator, pathSeparator)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
@@ -53,6 +53,12 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- 
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
+-- Directory for storing database entries for redo targets and sources
+redoDatabaseDirectory :: IO FilePath
+redoDatabaseDirectory = do
+  root <- redoMetaDirectory
+  return $ root </> "database"
+
 -- Directory for storing single redo session cached information. This speeds up
 -- the upToDate function
 redoCacheDirectory :: IO FilePath
@@ -60,21 +66,51 @@ redoCacheDirectory = do
   root <- redoMetaDirectory
   return $ root </> "cache"
 
--- Directory for storing single redo session cached information. This speeds up
--- the upToDate function
+-- Directory for storing file locks to syncronize parallel builds
 redoLockFileDirectory :: IO FilePath
 redoLockFileDirectory = do
   root <- redoMetaDirectory
   return $ root </> "locks"
 
+-- Create meta data folder for storing hashes and/or timestamps and return the folder name
+-- We store a dependency for the target on the do file
+-- Note: this function also blows out the old directory, which is good news because we don't want old
+-- dependencies hanging around if we are rebuilding a file.
+--initializeMetaDepsDir :: MetaDir -> DoFile -> IO ()
+--initializeMetaDepsDir metaDepsDir doFile = do
+--  removeMetaDir metaDepsDir
+--  createMetaDir metaDepsDir
+--  -- Write out .do script as dependency:
+--  storeStampFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
+--  -- Cache the do file:
+--  cacheDoFile metaDepsDir doFile
+initializeDatabase :: Key -> MetaDir -> DoFile -> IO ()
+initializeDatabase key metaDepsDir doFile = do
+  clearDatabaseDirectory key
+  createDatabaseDirectory key
+  -- Write out .do script as dependency:
+  storeStampFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
+  -- Cache the do file:
+  cacheDoFile key doFile
+
+---------------------------------------------------------------------
+-- Functions clearing meta data information
+---------------------------------------------------------------------
+-- Clear a database entry
+clearDatabaseDirectory :: Key -> IO ()
+clearDatabaseDirectory key = safeRemoveDirectoryRecursive =<< getDatabaseDirectory key
+
 -- Clear the entire redo cache directory:
-clearRedoCache :: IO ()
-clearRedoCache = safeRemoveDirectoryRecursive =<< redoCacheDirectory
+clearCache :: IO ()
+clearCache = safeRemoveDirectoryRecursive =<< redoCacheDirectory
 
 -- Clear the entire redo cache directory:
 clearLockFiles :: IO ()
 clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
 
+---------------------------------------------------------------------
+-- Functions getting database keys for targets
+---------------------------------------------------------------------
 -- Get the database for a given target:
 getKey :: Target -> IO Key
 getKey target = do
@@ -84,6 +120,56 @@ getKey target = do
     pathify "" = ""
     pathify string = x </> pathify xs
       where (x,xs) = splitAt 2 string
+
+-- Create a hash string for a target:
+-- TODO remove canonicalize Path here
+hashString :: Target -> IO FilePath
+hashString target = do 
+  absPath <- canonicalizePath' $ unTarget target
+  return $ hex $ BS.unpack $ hash $ BS.pack absPath
+
+---------------------------------------------------------------------
+-- Functions getting meta directories
+---------------------------------------------------------------------
+-- Get the database directory for a target:
+getDatabaseDirectory :: Key -> IO FilePath
+getDatabaseDirectory key = do
+  databaseDirectory <- redoDatabaseDirectory
+  return $ databaseDirectory </> keyToFilePath key
+
+-- Create the database directory for a target:
+createDatabaseDirectory :: Key -> IO ()
+createDatabaseDirectory key = safeCreateDirectoryRecursive =<< getDatabaseDirectory key
+
+-- Get the database directory for a target's ifchange dependencies:
+getIfChangeDirectory :: Key -> IO FilePath
+getIfChangeDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "r"
+
+-- Get the database directory for a target's ifcreate dependencies:
+getIfCreateDirectory :: Key -> IO FilePath
+getIfCreateDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "c"
+
+-- Get the database directory for a target's always dependencies:
+getAlwaysDirectory :: Key -> IO FilePath
+getAlwaysDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "a"
+
+-- Get the database directory for a target's always dependencies:
+getStampDirectory :: Key -> IO FilePath
+getStampDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "s"
+
+-- Get the database directory for a target's always dependencies:
+getDoFileDirectory :: Key -> IO FilePath
+getDoFileDirectory key = do
+  dbDir <- getDatabaseDirectory key
+  return $ dbDir </> "d"
 
 -- Get the cache directory for a target:
 getCacheDirectory :: Key -> IO FilePath
@@ -97,37 +183,21 @@ getLockFileDirectory key = do
   lockFileDir <- redoLockFileDirectory
   return $ lockFileDir </> keyToFilePath key
 
--- Form the hash directory where a target's dependency hashes will be stored given the target
-metaDir :: Target -> IO MetaDir
+-- TODO delete
 metaDir target = do
-  metaRoot <- redoMetaDirectory 
-  hashedTarget <- hashString target
-  return $ MetaDir $ metaRoot </> pathify hashedTarget
-  where 
-    pathify "" = ""
-    pathify string = x </> pathify xs
-      where (x,xs) = splitAt 2 string
-
--- Create a hash string for a target:
--- TODO remove canonicalize Path here
-hashString :: Target -> IO FilePath
-hashString target = do 
-  absPath <- canonicalizePath' $ unTarget target
-  return $ hex $ BS.unpack $ hash $ BS.pack absPath
-
--- Create meta data folder for storing hashes and/or timestamps and return the folder name
--- We store a dependency for the target on the do file
--- Note: this function also blows out the old directory, which is good news because we don't want old
--- dependencies hanging around if we are rebuilding a file.
-initializeMetaDepsDir :: MetaDir -> DoFile -> IO ()
-initializeMetaDepsDir metaDepsDir doFile = do
-  removeMetaDir metaDepsDir
-  createMetaDir metaDepsDir
-  -- Write out .do script as dependency:
-  storeStampFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
-  -- Cache the do file:
-  cacheDoFile metaDepsDir doFile
-  --putStatusStrLn $ "building meta deps for " ++ target ++ " at " ++ metaDepsDir
+  key <- getKey target
+  dir <- getDatabaseDirectory key
+  return $ MetaDir $ dir
+-- Form the hash directory where a target's dependency hashes will be stored given the target
+--metaDir :: Target -> IO MetaDir
+--metaDir target = do
+--  metaRoot <- redoMetaDirectory 
+--  hashedTarget <- hashString target
+--  return $ MetaDir $ metaRoot </> pathify hashedTarget
+--  where 
+--    pathify "" = ""
+--    pathify string = x </> pathify xs
+--      where (x,xs) = splitAt 2 string
 
 ---------------------------------------------------------------------
 -- Functions acting on MetaDir
@@ -136,7 +206,7 @@ removeMetaDir :: MetaDir -> IO ()
 removeMetaDir dir = safeRemoveDirectoryRecursive $ unMetaDir dir
 
 createMetaDir :: MetaDir -> IO ()
-createMetaDir dir = createDirectoryIfMissing True (unMetaDir dir)
+createMetaDir dir = safeCreateDirectoryRecursive (unMetaDir dir)
 
 getMetaDirContents :: MetaDir -> IO [MetaFile]
 getMetaDirContents dir = do contents <- getDirectoryContents $ unMetaDir dir
@@ -190,7 +260,19 @@ createEmptyMetaFile :: MetaFile -> IO ()
 --createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
 -- Note: I am creating a directory instead because it is faster than writing a single byte to a file
 --createEmptyMetaFile file = catch (createDirectory $ unMetaFile file) (\(_ :: SomeException) -> return ())
-createEmptyMetaFile file = createDirectoryIfMissing True (unMetaFile file)
+createEmptyMetaFile file = safeCreateDirectoryRecursive (unMetaFile file)
+
+writeMetaFile' :: FilePath -> String -> IO ()
+writeMetaFile' file contents = do 
+  safeRemoveDirectoryRecursive file
+  safeCreateDirectoryRecursive dir 
+  where dir = file </> contents
+
+readMetaFile' file = do
+  contents <- getDirectoryContents file
+  return $ contents !! 2
+
+-- TODO append meta file
 
 -- Write jibberish to a meta file so that it always compares bad:
 storeBadMetaFile :: MetaFile -> IO ()
@@ -230,8 +312,14 @@ markTargetBuilt target metaDepsDir = do
   writeMetaFile (builtFile metaDepsDir) timestamp
 
 -- Cache the do file path so we know which do was used to build a target the last time it was built
-cacheDoFile :: MetaDir -> DoFile -> IO ()
-cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir) (unDoFile doFile)
+-- TODO remove
+--cacheDoFile :: MetaDir -> DoFile -> IO ()
+--cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir) (unDoFile doFile)
+
+cacheDoFile :: Key -> DoFile -> IO ()
+cacheDoFile key doFile = do
+  doFileDir <- getDoFileDirectory key
+  writeMetaFile' doFileDir (escapeDependencyPath '@' $ unDoFile doFile)
 
 -- Return the lock file name for a target:
 -- TODO make this take a key
@@ -244,7 +332,7 @@ createLockFile' :: Key -> IO LockFile
 createLockFile' key = do 
   lockFileDir <- getLockFileDirectory key
   -- TODO cleanup:
-  createDirectoryIfMissing True lockFileDir 
+  safeCreateDirectoryRecursive lockFileDir 
   return $ LockFile $ lockFileDir </> "l"
 
 ---------------------------------------------------------------------
@@ -265,11 +353,19 @@ isTargetMarkedDirty :: Key -> IO Bool
 isTargetMarkedDirty key = doesMetaFileExist =<< dirtyFile key
 
 -- Retrieve the cached do file path inside meta dir
-getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
-getCachedDoFile metaDepsDir = catch (readCache cache) (\(_ :: SomeException) -> return Nothing)
-  where readCache cachedDo = do doFile <- readFile cachedDo
-                                return $ Just $ DoFile doFile
-        cache = unMetaFile $ doFileCache metaDepsDir
+-- getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
+-- getCachedDoFile metaDepsDir = catch (readCache cache) (\(_ :: SomeException) -> return Nothing)
+--   where readCache cachedDo = do doFile <- readFile cachedDo
+--                                 return $ Just $ DoFile doFile
+--         cache = unMetaFile $ doFileCache metaDepsDir
+
+-- Retrieve the cached do file path inside meta dir
+getCachedDoFile :: Key -> IO (Maybe DoFile)
+getCachedDoFile key = do
+  doFileDir <- getDoFileDirectory key
+  catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
+  where readDoFile dir = do doFile <- readMetaFile' dir
+                            return $ Just $ (DoFile $ unEscapeDependencyPath '@' doFile)
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing

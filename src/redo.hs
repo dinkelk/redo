@@ -111,7 +111,7 @@ mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
   -- Remove old lock files and other cached files:
   clearLockFiles
-  clearRedoCache
+  clearCache
 
   -- Set a unique session number for this session:
   -- TODO remove

@@ -166,7 +166,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  initializeMetaDepsDir depDir doFile
+  initializeDatabase key depDir doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment

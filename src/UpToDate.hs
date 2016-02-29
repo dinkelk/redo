@@ -83,7 +83,7 @@ upToDate' level target depDir key = do
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
       if takeExtension (unTarget target) == ".do" then return False
-      else maybe (return True) (pathsNotEqual doFile) =<< getCachedDoFile metaDepsDir
+      else maybe (return True) (pathsNotEqual doFile) =<< getCachedDoFile key
       where pathsNotEqual path1 path2 = if path1 /= path2 then return True else return False
 
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
