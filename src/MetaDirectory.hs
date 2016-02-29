@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, storePhonyTarget, createLockFile, markTargetClean, 
+                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, storePhonyTarget, createLockFile, markTargetClean, 
                      markTargetDirty, storeStamp, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
                      isTargetMarkedClean, readMetaFile, getCachedDoFile, getMetaDirDependencies, removeMetaDir,
@@ -274,11 +274,20 @@ writeMetaFile' file contents = do
   safeCreateDirectoryRecursive dir 
   where dir = file </> contents
 
+appendMetaFile' :: FilePath -> String -> IO ()
+appendMetaFile' file contents = do 
+  safeCreateDirectoryRecursive dir 
+  where dir = file </> contents
+
+-- Read the first entry of the meta file
 readMetaFile' file = do
   contents <- getDirectoryContents file
   return $ contents !! 2
 
--- TODO append meta file
+-- Read all of the entries of the meta file
+readMetaFile'' file = do
+  contents <- getDirectoryContents file
+  return $ drop 2 contents
 
 -- Write jibberish to a meta file so that it always compares bad:
 storeBadMetaFile :: MetaFile -> IO ()
@@ -292,9 +301,19 @@ storeIfChangeDep metaDepsDir dep = maybe (storeBadMetaFile theMetaFile) (storeSt
   where theMetaFile = ifChangeMetaFile metaDepsDir dep
 
 -- Store the ifcreate dep only if the target doesn't exist right now
-storeIfCreateDep :: MetaDir -> Target -> IO ()
-storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) 
+--storeIfCreateDep :: MetaDir -> Target -> IO ()
+--storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) 
+--  (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
+
+-- Store the ifcreate dep only if the target doesn't exist right now
+storeIfCreateDep :: Key -> Target -> IO ()
+storeIfCreateDep key dep = bool (storeIfCreateDep' key dep) 
   (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
+
+storeIfCreateDep' :: Key -> Target -> IO () 
+storeIfCreateDep' key target = do
+  ifCreateDir <- getIfCreateDirectory key
+  appendMetaFile' ifCreateDir (escapeDependencyPath '@' $ unTarget target)
 
 --storeAlwaysDep :: MetaDir -> IO ()
 --storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
@@ -307,6 +326,15 @@ storeAlwaysDep key = do
 hasAlwaysDep :: Key -> IO Bool
 hasAlwaysDep key = doesDirectoryExist =<< getAlwaysDirectory key
 
+getIfCreateDeps :: Key -> IO [MetaFile]
+getIfCreateDeps key = do
+  ifCreateDir <- getIfCreateDirectory key
+  getIfCreateDeps' ifCreateDir
+  where 
+    getIfCreateDeps' dir = 
+      catch (do files <- readMetaFile'' dir 
+                return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
+            (\(_ :: SomeException) -> return [])
 
 --storePhonyTarget :: MetaDir -> IO () 
 --storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
@@ -543,7 +571,7 @@ unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 ---------------------------------------------------------------------
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [Target] -> IO ()
-storeIfChangeDependencies = storeDependencies storeIfChangeDep
+storeIfChangeDependencies = storeDependencies' storeIfChangeDep
 
 -- Store dependencies for redo-ifcreate:
 storeIfCreateDependencies :: [Target] -> IO ()
@@ -566,8 +594,27 @@ storeAlwaysDependency = do
   storeAlwaysDep key
 
 -- Store dependencies given a store action and a list of dependencies to store:
-storeDependencies :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
+storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
+  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
+  dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
+  -- todo cleanup this geEnv
+  parentRedoTarget <- getEnv "REDO_TARGET"
+  key <- getKey $ Target parentRedoTarget
+  mapM_ (storeAction key) dependenciesRel2Parent
+  where
+    makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
+    makeRelativeToParent parent targets = do
+      currentDir <- getCurrentDirectory
+      -- Note: All target listed here are relative to the current directory in the .do script. This could
+      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
+      -- if 'cd' was used in the .do script.
+      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
+      return $ map (Target . makeRelative parent . (currentDir </>) . unTarget) targets
+
+
+storeDependencies' :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
+storeDependencies' storeAction dependencies = do 
   (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
   mapM_ (storeAction parentRedoMetaDir) dependenciesRel2Parent

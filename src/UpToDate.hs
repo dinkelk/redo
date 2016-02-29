@@ -91,10 +91,11 @@ upToDate' level target depDir key = do
 -- dependencies to make sure the dependencies are up to date.
 depsUpToDate :: Int -> Target -> MetaDir -> FilePath -> Key -> IO Bool
 depsUpToDate level target metaDepsDir doFileDir key = do
-  (ifChangeDeps, ifCreateDeps, _) <- getMetaDirDependencies metaDepsDir
+  (ifChangeDeps, _, _) <- getMetaDirDependencies metaDepsDir
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"
   else do 
+    ifCreateDeps <- getIfCreateDeps key
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     depCreated' <- mapOr (doesTargetExist . ifCreateMetaFileToTarget doFileDir) ifCreateDeps
     if depCreated' then return False `debug'` "-dep created"
