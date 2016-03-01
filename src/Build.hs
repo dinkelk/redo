@@ -128,12 +128,11 @@ performActionInDir dir action target = do
 -- Run do file if the target was not modified by the user first.
 runDoFile :: Target -> DoFile -> IO ExitCode
 runDoFile target doFile = do 
-  metaDepsDir <- metaDir target
   key <- getKey target
-  cachedTimeStamp <- getTargetBuiltTimeStamp metaDepsDir
-  currentTimeStamp <- safeGetStamp target
+  cachedStamp <- getStamp key
+  currentStamp <- safeStampTarget target
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-  whenEqualOrNothing cachedTimeStamp currentTimeStamp targetModifiedError (runDoFile' target doFile currentTimeStamp targetIsDirectory metaDepsDir key)
+  whenEqualOrNothing cachedStamp currentStamp targetModifiedError (runDoFile' target doFile currentStamp targetIsDirectory key)
   where
     targetModifiedError :: IO ExitCode
     targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
@@ -142,8 +141,8 @@ runDoFile target doFile = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Target -> DoFile -> Maybe Stamp -> Bool -> MetaDir -> Key -> IO ExitCode
-runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do 
+runDoFile' :: Target -> DoFile -> Maybe Stamp -> Bool -> Key -> IO ExitCode
+runDoFile' target doFile currentTimeStamp targetIsDirectory key = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -166,7 +165,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the meta deps dir:
-  initializeDatabase key depDir doFile
+  initializeDatabase key target doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
@@ -204,7 +203,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory depDir key = do
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- fileSize tmpStdout
-      newTimeStamp <- safeGetStamp target
+      newTimeStamp <- safeStampTarget target
       targetIsStillDirectory <- doesDirectoryExist $ unTarget target
       -- See if the user modified $1 directly... we don't care if the user modified a directory target however
       if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then dollarOneModifiedError 

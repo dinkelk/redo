@@ -1,12 +1,11 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Types(getStamp, safeGetStamp, doesTargetExist, doesDoFileExist, findDoFile, Stamp(..), DoFile(..), Target(..)) where
+module Types(stampTarget, safeStampTarget, doesTargetExist, doesDoFileExist, findDoFile, Stamp(..), DoFile(..), Target(..)) where
 
 import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
 import Control.Monad (liftM, filterM)
-import qualified Data.ByteString.Char8 as BS
 import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import System.Directory (doesFileExist, doesDirectoryExist)
@@ -27,12 +26,12 @@ newtype Target = Target { unTarget :: FilePath } deriving (Eq) -- The absolute p
 -- Generate stamps from targets
 ---------------------------------------------------------------------
 -- Get the stamp of the target which marks it's current status
-getStamp :: Target -> IO Stamp 
-getStamp = getTimeStamp
+stampTarget :: Target -> IO Stamp 
+stampTarget = getTimeStamp
 
 -- Get the stamp of the target if it exists, otherwise return Nothing
-safeGetStamp :: Target -> IO (Maybe Stamp)
-safeGetStamp target = catch (Just <$> getStamp target) (\(_ :: SomeException) -> return Nothing)
+safeStampTarget :: Target -> IO (Maybe Stamp)
+safeStampTarget target = catch (Just <$> stampTarget target) (\(_ :: SomeException) -> return Nothing)
 
 -- Get the target timestamp
 getTimeStamp :: Target -> IO Stamp

@@ -1,12 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module MetaDirectory(clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markTargetClean, unEscapeDependencyPath, 
-                     markTargetDirty, storeStamp, metaDir, getTargetBuiltTimeStamp, ifChangeMetaFileToTarget,
-                     ifCreateMetaFileToTarget, doesMetaDirExist, getBuiltTargetPath, isTargetMarkedDirty, 
-                     isTargetMarkedClean, readMetaFile, readMetaFile', getCachedDoFile, getMetaDirDependencies, removeMetaDir,
-                     isSourceFile, MetaDir(..), LockFile(..), MetaFile(..), Key(..), getKey) where
+module MetaDirectory(getDatabaseDirectory, clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
+                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markTargetClean, unEscapeDependencyPath, removeDatabaseDirectory,
+                     markTargetDirty, storeStamp, ifChangeMetaFileToTarget,
+                     ifCreateMetaFileToTarget, getBuiltTargetPath, isDirty, 
+                     isClean, getCachedDoFile, getStamp, getIfChangeEntry, 
+                     isSourceFile, LockFile(..), MetaFile(..), Key(..), getKey) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
@@ -14,11 +14,12 @@ import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import System.Directory (getAppUserDataDirectory, doesFileExist, getDirectoryContents, createDirectoryIfMissing, getCurrentDirectory, doesDirectoryExist)
+import System.Directory (getAppUserDataDirectory, getCurrentDirectory, doesDirectoryExist)
 import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), isPathSeparator, pathSeparator)
 import System.Environment (getEnv)
 import System.Exit (exitFailure)
 
+import DatabaseEntry
 import PrettyPrint
 import Helpers
 import Types
@@ -27,7 +28,6 @@ import Types
 -- Type Definitions:
 ---------------------------------------------------------------------
 newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The data base key for a target
-newtype MetaDir = MetaDir { unMetaDir :: FilePath } deriving (Eq) -- The meta directory associated with a target
 newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
 
@@ -49,7 +49,7 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
--- Directory for storing and fetching data on dependencies of redo targets.
+-- Directory for storing and fetching data on dpendencies of redo targets.
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
@@ -76,22 +76,16 @@ redoLockFileDirectory = do
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
---initializeMetaDepsDir :: MetaDir -> DoFile -> IO ()
---initializeMetaDepsDir metaDepsDir doFile = do
---  removeMetaDir metaDepsDir
---  createMetaDir metaDepsDir
---  -- Write out .do script as dependency:
---  storeStampFile metaDepsDir (Target $ unDoFile doFile) (Target $ unDoFile doFile)
---  -- Cache the do file:
---  cacheDoFile metaDepsDir doFile
-initializeDatabase :: Key -> MetaDir -> DoFile -> IO ()
-initializeDatabase key metaDepsDir doFile = do
+initializeDatabase :: Key -> Target -> DoFile -> IO ()
+initializeDatabase key target doFile = do
   clearDatabaseDirectory key
   createDatabaseDirectory key
   -- Write out .do script as dependency:
   storeIfChangeDep key (Target $ unDoFile doFile)
+  -- Write out target name:
+  storeTarget key target
   -- Cache the do file:
-  cacheDoFile key doFile
+  storeDoFile key doFile
 
 ---------------------------------------------------------------------
 -- Functions clearing meta data information
@@ -129,7 +123,7 @@ hashString target = do
   return $ hex $ BS.unpack $ hash $ BS.pack absPath
 
 ---------------------------------------------------------------------
--- Functions getting meta directories
+-- Functions getting database entries:
 ---------------------------------------------------------------------
 -- Get the database directory for a target:
 getDatabaseDirectory :: Key -> IO FilePath
@@ -141,193 +135,99 @@ getDatabaseDirectory key = do
 createDatabaseDirectory :: Key -> IO ()
 createDatabaseDirectory key = safeCreateDirectoryRecursive =<< getDatabaseDirectory key
 
--- Get the database directory for a target's ifchange dependencies:
-getIfChangeDirectory :: Key -> IO FilePath
-getIfChangeDirectory key = do
-  dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "r"
+-- Remove a database directory:
+removeDatabaseDirectory :: Key -> IO ()
+removeDatabaseDirectory key = safeRemoveDirectoryRecursive =<< getDatabaseDirectory key
 
--- Get the database directory for a target's ifcreate dependencies:
-getIfCreateDirectory :: Key -> IO FilePath
-getIfCreateDirectory key = do
+-- Generic function for getting a database entry with a certain name:
+getDatabaseEntry :: FilePath -> Key -> IO Entry
+getDatabaseEntry name key = do
   dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "c"
+  return $ Entry $ dbDir </> name
 
--- Get the database directory for a target's always dependencies:
-getAlwaysDirectory :: Key -> IO FilePath
-getAlwaysDirectory key = do
-  dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "a"
+-- Get the database entry for a target's ifchange dependencies:
+getIfChangeEntry :: Key -> IO Entry
+getIfChangeEntry = getDatabaseEntry "r"
 
--- Get the database directory for a target's always dependencies:
-getStampDirectory :: Key -> IO FilePath
-getStampDirectory key = do
-  dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "s"
+-- Get the database entry for a target's ifcreate dependencies:
+getIfCreateEntry :: Key -> IO Entry
+getIfCreateEntry = getDatabaseEntry "c"
 
--- Get the database directory for a target's always dependencies:
-getPhonyTargetDirectory :: Key -> IO FilePath
-getPhonyTargetDirectory key = do
-  dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "p"
+-- Get the database entry for a target's always dependencies:
+getAlwaysEntry :: Key -> IO Entry 
+getAlwaysEntry = getDatabaseEntry "a"
 
--- Get the database directory for a target's always dependencies:
-getDoFileDirectory :: Key -> IO FilePath
-getDoFileDirectory key = do
-  dbDir <- getDatabaseDirectory key
-  return $ dbDir </> "d"
+-- Get the database entry for a target's always dependencies:
+getStampEntry :: Key -> IO Entry
+getStampEntry = getDatabaseEntry "s"
 
+-- Get the database entry for a target's always dependencies:
+getPhonyTargetEntry :: Key -> IO Entry 
+getPhonyTargetEntry = getDatabaseEntry "p"
+
+-- Get the database entry for a target's do file name:
+getDoFileEntry :: Key -> IO Entry
+getDoFileEntry = getDatabaseEntry "d"
+
+-- Get the database entry for a target's file name:
+getTargetEntry :: Key -> IO Entry
+getTargetEntry = getDatabaseEntry "t"
+
+---------------------------------------------------------------------
+-- Functions getting database entries:
+---------------------------------------------------------------------
 -- Get the cache directory for a target:
 getCacheDirectory :: Key -> IO FilePath
 getCacheDirectory key = do
   cacheDir <- redoCacheDirectory
   return $ cacheDir </> keyToFilePath key
 
+-- Generic function for getting a cache entry with a certain name:
+getCacheEntry :: FilePath -> Key -> IO Entry
+getCacheEntry name key = do
+  cacheDir <- getCacheDirectory key
+  return $ Entry $ cacheDir </> name
+
+-- Get the entry for marking a target clean:
+getCleanEntry :: Key -> IO Entry
+getCleanEntry = getCacheEntry "c"
+
+-- Get the entry for marking a target dirty:
+getDirtyEntry :: Key -> IO Entry
+getDirtyEntry = getCacheEntry "d"
+
+---------------------------------------------------------------------
+-- Functions getting lock files:
+---------------------------------------------------------------------
 -- Get the lock file directory for a target:
 getLockFileDirectory :: Key -> IO FilePath
 getLockFileDirectory key = do
   lockFileDir <- redoLockFileDirectory
   return $ lockFileDir </> keyToFilePath key
 
--- TODO delete
-metaDir target = do
-  key <- getKey target
-  dir <- getDatabaseDirectory key
-  return $ MetaDir $ dir
--- Form the hash directory where a target's dependency hashes will be stored given the target
---metaDir :: Target -> IO MetaDir
---metaDir target = do
---  metaRoot <- redoMetaDirectory 
---  hashedTarget <- hashString target
---  return $ MetaDir $ metaRoot </> pathify hashedTarget
---  where 
---    pathify "" = ""
---    pathify string = x </> pathify xs
---      where (x,xs) = splitAt 2 string
-
----------------------------------------------------------------------
--- Functions acting on MetaDir
----------------------------------------------------------------------
-removeMetaDir :: MetaDir -> IO ()
-removeMetaDir dir = safeRemoveDirectoryRecursive $ unMetaDir dir
-
-createMetaDir :: MetaDir -> IO ()
-createMetaDir dir = safeCreateDirectoryRecursive (unMetaDir dir)
-
-getMetaDirContents :: MetaDir -> IO [MetaFile]
-getMetaDirContents dir = do contents <- getDirectoryContents $ unMetaDir dir
-                            return $ map MetaFile contents
-
--- Given a meta directory for a target return a tuple of dependency file lists
--- in the order ifchanged, ifcreated, always
-getMetaDirDependencies :: MetaDir -> IO ([MetaFile], [MetaFile], [MetaFile])
-getMetaDirDependencies dir = do
-  depHashFiles <- getMetaDirContents dir
-  return (ifChangeDeps depHashFiles, ifCreateDeps depHashFiles, ifAlwaysDeps depHashFiles)
-  where 
-    -- Functions which filter a set of dependencies for only those made with "-ifchange", "-ifcreate", or "always"
-    ifAlwaysDeps = filter (fileHasPrepend always_dependency_prepend) 
-    ifChangeDeps = filter (fileHasPrepend ifchange_dependency_prepend)
-    ifCreateDeps = filter (fileHasPrepend ifcreate_dependency_prepend)
-    fileHasPrepend depPrepend metaFile = take 2 (unMetaFile metaFile) == '.' : [depPrepend]
-
----------------------------------------------------------------------
--- Existance functions:
----------------------------------------------------------------------
-doesMetaDirExist :: MetaDir -> IO Bool
-doesMetaDirExist depDir = doesDirectoryExist $ unMetaDir depDir
-
--- TODO: make this only check directories since that is all we are storing now
-doesMetaFileExist :: MetaFile -> IO Bool
-doesMetaFileExist metaFile = bool (doesDirectoryExist mFile) (return True) =<< doesFileExist mFile
-  where mFile = unMetaFile metaFile
-
 ---------------------------------------------------------------------
 -- Functions writing meta files:
 ---------------------------------------------------------------------
--- Calculate the hash of a target's dependency and write it to the proper meta data location
--- If the dependency doesn't exist, do not store a hash
---writeMetaFile :: MetaFile -> Stamp -> IO ()
---writeMetaFile file contents = catch
---  ( BS.writeFile fileToWrite byteContents )
---  (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
---                               putErrorStrLn $ "Error: Encountered problem writing '" ++ BS.unpack byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
---                               exitFailure)
---  where byteContents = unStamp contents
---        fileToWrite = unMetaFile file
-writeMetaFile :: MetaFile -> Stamp -> IO ()
-writeMetaFile file contents = catch
-  ( writeFile fileToWrite byteContents )
-  (\(_ :: SomeException) -> do cd <- getCurrentDirectory 
-                               putErrorStrLn $ "Error: Encountered problem writing '" ++ byteContents ++ "' to '" ++ cd </> fileToWrite ++ "'."
-                               exitFailure)
-  where byteContents = unStamp contents
-        fileToWrite = unMetaFile file
-
--- Get the stamp of a target and store it in the meta directory
--- TODO: remove this function... we shouldn't need to do this once links are working
---storeStampFile :: Key -> Target -> Target -> IO ()
---storeStampFile key depName depToStamp = writeMetaFile' theMetaFile =<< getStamp depToStamp
---  where theMetaFile = ifChangeMetaFile metaDepsDir depName
-
--- Creation of an empty dep file:
-createEmptyMetaFile :: MetaFile -> IO ()
---createEmptyMetaFile file = writeMetaFile file (Stamp $ BS.singleton '.')
--- Note: I am creating a directory instead because it is faster than writing a single byte to a file
---createEmptyMetaFile file = catch (createDirectory $ unMetaFile file) (\(_ :: SomeException) -> return ())
-createEmptyMetaFile file = safeCreateDirectoryRecursive (unMetaFile file)
-
-writeMetaFile' :: FilePath -> String -> IO ()
-writeMetaFile' file contents = do 
-  safeRemoveDirectoryRecursive file
-  safeCreateDirectoryRecursive dir 
-  where dir = file </> contents
-
-appendMetaFile' :: FilePath -> String -> IO ()
-appendMetaFile' file contents = do 
-  safeCreateDirectoryRecursive dir 
-  where dir = file </> contents
-
--- Read the first entry of the meta file
-readMetaFile' file = do
-  contents <- getDirectoryContents file
-  return $ contents !! 2
-
--- Read all of the entries of the meta file
-readMetaFile'' file = do
-  contents <- getDirectoryContents file
-  return $ drop 2 contents
-
--- Write jibberish to a meta file so that it always compares bad:
---storeBadMetaFile :: FilePath -> IO ()
---storeBadMetaFile file = writeMetaFile' file "@@"
-
 -- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
 -- because the target still depenends on this target, it just failed to built last time, so we store a
 -- blank (bad) stamp that will never match a successfully built target
 storeIfChangeDep :: Key -> Target -> IO ()
 storeIfChangeDep key dep = maybe (storeIfChangeDepBad' key dep) (storeIfChangeDep' key) =<< getBuiltTargetPath' dep
 
---storeIfChangeDep :: MetaDir -> Target -> IO ()
---storeIfChangeDep metaDepsDir dep = maybe (storeBadMetaFile theMetaFile) (storeStampFile metaDepsDir dep) =<< getBuiltTargetPath' dep
---  where theMetaFile = ifChangeMetaFile metaDepsDir dep
 storeIfChangeDep' :: Key -> Target -> IO () 
 storeIfChangeDep' key target = do
   -- TODO remove the stamping after links are in place...
-  stamp <- getStamp target
-  ifChangeDir <- getIfChangeDirectory key
-  appendMetaFile' (ifChangeDir </> (escapeDependencyPath '@' $ unTarget target)) (escapeDependencyPath '@' $ unStamp stamp)
+  stamp <- stampTarget target
+  ifChangeEntry <- getIfChangeEntry key
+  appendEntry (Entry ((entryToFilePath ifChangeEntry) </> (escapeDependencyPath '@' $ unTarget target))) 
+              (escapeDependencyPath '@' $ unStamp stamp)
 
 storeIfChangeDepBad' :: Key -> Target -> IO () 
 storeIfChangeDepBad' key target = do
   -- TODO remove the stamping after links are in place...
-  ifChangeDir <- getIfChangeDirectory key
-  appendMetaFile' (ifChangeDir </> (escapeDependencyPath '@' $ unTarget target)) (escapeDependencyPath '@' $ "asdfasdf")
-
--- Store the ifcreate dep only if the target doesn't exist right now
---storeIfCreateDep :: MetaDir -> Target -> IO ()
---storeIfCreateDep metaDepsDir dep = bool (createEmptyMetaFile $ ifCreateMetaFile metaDepsDir dep) 
---  (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
+  ifChangeEntry <- getIfChangeEntry key
+  appendEntry (Entry ((entryToFilePath ifChangeEntry) </> (escapeDependencyPath '@' $ unTarget target))) 
+              (escapeDependencyPath '@' $ "jibberish")
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
@@ -336,90 +236,87 @@ storeIfCreateDep key dep = bool (storeIfCreateDep' key dep)
 
 storeIfCreateDep' :: Key -> Target -> IO () 
 storeIfCreateDep' key target = do
-  ifCreateDir <- getIfCreateDirectory key
-  appendMetaFile' ifCreateDir (escapeDependencyPath '@' $ unTarget target)
-
---storeAlwaysDep :: MetaDir -> IO ()
---storeAlwaysDep metaDepsDir = createEmptyMetaFile $ alwaysMetaFile metaDepsDir
+  ifCreateDir <- getIfCreateEntry key
+  appendEntry ifCreateDir (escapeDependencyPath '@' $ unTarget target)
 
 storeAlwaysDep :: Key -> IO () 
 storeAlwaysDep key = do
-  alwaysDir <- getAlwaysDirectory key
-  safeCreateDirectoryRecursive alwaysDir
+  alwaysEntry <- getAlwaysEntry key
+  createEntry alwaysEntry
 
 hasAlwaysDep :: Key -> IO Bool
-hasAlwaysDep key = doesDirectoryExist =<< getAlwaysDirectory key
+hasAlwaysDep key = doesEntryExist =<< getAlwaysEntry key
 
 getIfCreateDeps :: Key -> IO [MetaFile]
 getIfCreateDeps key = do
-  ifCreateDir <- getIfCreateDirectory key
-  getIfCreateDeps' ifCreateDir
+  ifCreateEntry <- getIfCreateEntry key
+  getIfCreateDeps' ifCreateEntry
   where 
-    getIfCreateDeps' dir = 
-      catch (do files <- readMetaFile'' dir 
+    getIfCreateDeps' entry = 
+      catch (do files <- readEntry entry
                 return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
             (\(_ :: SomeException) -> return [])
 
 getIfChangeDeps :: Key -> IO [MetaFile]
 getIfChangeDeps key = do
-  ifChangeDir <- getIfChangeDirectory key
+  ifChangeDir <- getIfChangeEntry key
   getIfChangeDeps' ifChangeDir
   where 
     getIfChangeDeps' dir = 
-      catch (do files <- readMetaFile'' dir
+      catch (do files <- readEntry dir
                 return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
             (\(_ :: SomeException) -> return [])
 
 getIfChangeDeps'' :: Key -> IO [MetaFile]
 getIfChangeDeps'' key = do
-  ifChangeDir <- getIfChangeDirectory key
+  ifChangeDir <- getIfChangeEntry key
   getIfChangeDeps' ifChangeDir
   where 
     getIfChangeDeps' dir = 
-      catch (do files <- readMetaFile'' dir
+      catch (do files <- readEntry dir
                 return $ map MetaFile files)
             (\(_ :: SomeException) -> return [])
 
---storePhonyTarget :: MetaDir -> IO () 
---storePhonyTarget metaDepsDir = createEmptyMetaFile $ phonyFile metaDepsDir
-
 storePhonyTarget :: Key -> IO () 
 storePhonyTarget key = do
-  phonyTargetDir <- getPhonyTargetDirectory key
-  writeMetaFile' phonyTargetDir (escapeDependencyPath '@' $ ".")
+  phonyTargetDir <- getPhonyTargetEntry key
+  writeEntry phonyTargetDir (escapeDependencyPath '@' $ ".")
 
 -- TODO make these functions match the rest
 markTargetClean :: Key -> IO ()
 markTargetClean key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
-  createEmptyMetaFile =<< cleanFile key
+  createEntry =<< getCleanEntry key
 
 markTargetDirty :: Key -> IO ()
 markTargetDirty key =
   --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
-  createEmptyMetaFile =<< dirtyFile key
+  createEntry =<< getDirtyEntry key
 
---markTargetBuilt :: Target -> MetaDir -> IO ()
---markTargetBuilt target metaDepsDir = do
---  timestamp <- getStamp target
---  writeMetaFile (builtFile metaDepsDir) timestamp
+storeDoFile :: Key -> DoFile -> IO ()
+storeDoFile key doFile = do
+  doFileDir <- getDoFileEntry key
+  writeEntry doFileDir (escapeDependencyPath '@' $ unDoFile doFile)
 
--- Cache the do file path so we know which do was used to build a target the last time it was built
--- TODO remove
---cacheDoFile :: MetaDir -> DoFile -> IO ()
---cacheDoFile metaDepsDir doFile = writeFile (unMetaFile $ doFileCache metaDepsDir) (unDoFile doFile)
-
-cacheDoFile :: Key -> DoFile -> IO ()
-cacheDoFile key doFile = do
-  doFileDir <- getDoFileDirectory key
-  writeMetaFile' doFileDir (escapeDependencyPath '@' $ unDoFile doFile)
+storeTarget :: Key -> Target -> IO ()
+storeTarget key target = do
+  targetEntry <- getTargetEntry key
+  writeEntry targetEntry (escapeDependencyPath '@' $ unTarget target)
 
 storeStamp :: Key -> Target -> IO ()
 storeStamp key target = do
-  stamp <- getStamp target
-  stampDir <- getStampDirectory key
+  stamp <- stampTarget target
+  stampDir <- getStampEntry key
   -- TODO fix this the redundant unpack here
-  writeMetaFile' stampDir (escapeDependencyPath '@' $ unStamp stamp)
+  writeEntry stampDir (unStamp stamp)
+
+-- Get the cached timestamp for when a target was last built. Return '.'
+getStamp :: Key -> IO (Maybe Stamp)
+getStamp key = catch (
+  do stampDir <- getStampEntry key
+     contents <- readEntry1 stampDir
+     return $ Just $ Stamp $ contents)
+  (\(_ :: SomeException) -> return Nothing)
 
 -- Return the lock file name for a target:
 -- TODO make this take a key
@@ -438,51 +335,32 @@ createLockFile' key = do
 ---------------------------------------------------------------------
 -- Functions reading meta files:
 ---------------------------------------------------------------------
---readMetaFile :: MetaFile -> IO Stamp
---readMetaFile file = Stamp <$> BS.readFile (unMetaFile file)
-readMetaFile :: MetaFile -> IO Stamp
-readMetaFile file = Stamp <$> readFile (unMetaFile file)
+isClean :: Key -> IO Bool 
+isClean key = doesEntryExist =<< getCleanEntry key
 
--- Get the cached timestamp for when a target was last built. Return '.'
-getTargetBuiltTimeStamp :: MetaDir -> IO (Maybe Stamp)
-getTargetBuiltTimeStamp metaDepsDir = catch (Just <$> readMetaFile (builtFile metaDepsDir)) 
-  (\(_ :: SomeException) -> return Nothing)
-
-isTargetMarkedClean :: Key -> IO Bool 
-isTargetMarkedClean key = doesMetaFileExist =<< cleanFile key
-
-isTargetMarkedDirty :: Key -> IO Bool 
-isTargetMarkedDirty key = doesMetaFileExist =<< dirtyFile key
-
--- Retrieve the cached do file path inside meta dir
--- getCachedDoFile :: MetaDir -> IO (Maybe DoFile)
--- getCachedDoFile metaDepsDir = catch (readCache cache) (\(_ :: SomeException) -> return Nothing)
---   where readCache cachedDo = do doFile <- readFile cachedDo
---                                 return $ Just $ DoFile doFile
---         cache = unMetaFile $ doFileCache metaDepsDir
+isDirty :: Key -> IO Bool 
+isDirty key = doesEntryExist =<< getDirtyEntry key
 
 -- Retrieve the cached do file path inside meta dir
 getCachedDoFile :: Key -> IO (Maybe DoFile)
 getCachedDoFile key = do
-  doFileDir <- getDoFileDirectory key
+  doFileDir <- getDoFileEntry key
   catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
-  where readDoFile dir = do doFile <- readMetaFile' dir
+  where readDoFile dir = do doFile <- readEntry1 dir
                             return $ Just $ (DoFile $ unEscapeDependencyPath '@' doFile)
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing
-getBuiltTargetPath :: MetaDir -> Target -> IO(Maybe Target)
-getBuiltTargetPath metaDepsDir target = do
-  -- TODO cleanup, this function should take a key
-  key <- getKey target
-  phonyF <- phonyFile key
-  returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyF)) target
+getBuiltTargetPath :: Key -> Target -> IO(Maybe Target)
+getBuiltTargetPath key target = do
+  phonyEntry <- getPhonyTargetEntry key
+  returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyEntry)) target
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
-        returnPhonyIfExists failFunc file = bool failFunc (return $ Just $ Target $ unMetaFile file) =<< doesMetaFileExist file
+        returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
 
 getBuiltTargetPath' :: Target -> IO(Maybe Target)
-getBuiltTargetPath' target = do metaDepsDir <- metaDir target
-                                getBuiltTargetPath metaDepsDir target
+getBuiltTargetPath' target = do key <- getKey target
+                                getBuiltTargetPath key target
 
 -- Does the target file or directory exist on the filesystem?
 -- Checks if a target file is a buildable target, or if it is a source file
@@ -491,76 +369,9 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
   where
     -- Check's if a target has dependencies stored already
     hasDependencies :: Target -> IO Bool
-    hasDependencies t = doesMetaDirExist =<< metaDir t
-
----------------------------------------------------------------------
--- Functions deleting meta files:
----------------------------------------------------------------------
--- Check for stored clean or dirty files in a meta dir.
--- Remove dirty and clean files in a meta dir.
--- Optimization: running this function takes a long time. We don't have to run it, so I am no longer using it.
--- Not running this means that session files will begin to build up in the meta directories. However, once
--- a target is rebuilt, all old session files are removed anyways. If enough session files build up (think 1000s)
--- then maybe running upToDate will be slower... but that is probably not the common case, so removing this function
--- for now.
--- removeSessionFiles :: MetaDir -> IO ()
--- removeSessionFiles metaDepsDir = safeRemoveGlob metaDepsDir' "*.cln." >> safeRemoveGlob metaDepsDir' "*.drt." 
---   where metaDepsDir' = unMetaDir metaDepsDir
-
--- TODO remove
---removeLockFiles :: IO ()
---removeLockFiles = do dir <- redoMetaDirectory 
---                     safeRemoveGlob dir "*.lck."
-
----------------------------------------------------------------------
--- Functions creating meta file names
----------------------------------------------------------------------
--- Form the hash file path for a target's dependency given the current target meta dir and the target's dependency
-getMetaFile :: (FilePath -> FilePath) -> MetaDir -> Target -> MetaFile
-getMetaFile escapeFunc metaDepsDir dependency = MetaFile $ unMetaDir metaDepsDir </> escapeFunc (unTarget dependency)
-
--- Functions to get the dependency path for each file type
-ifChangeMetaFile :: MetaDir -> Target -> MetaFile 
-ifChangeMetaFile = getMetaFile escapeIfChangePath
-ifCreateMetaFile :: MetaDir -> Target -> MetaFile 
-ifCreateMetaFile = getMetaFile escapeIfCreatePath
-alwaysMetaFile :: MetaDir -> MetaFile 
-alwaysMetaFile depDir = MetaFile $ unMetaDir depDir </> file
-  where file = "." ++ [always_dependency_prepend] ++ "redo-always" ++ [always_dependency_prepend] ++ "."
-
---phonyFile :: MetaDir -> MetaFile
---phonyFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> "." ++ "phony-target" ++ "."
-
--- TODO remove
-phonyFile :: Key -> IO MetaFile
-phonyFile key = do
-  phonyTargetDir <- getPhonyTargetDirectory key
-  return $ MetaFile $ phonyTargetDir
-
-doFileCache :: MetaDir -> MetaFile  
-doFileCache metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".do.do."
-
---cleanFile :: MetaDir -> IO MetaFile  
---cleanFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
---  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".cln." ++ session  ++ ".cln."
-
-cleanFile :: Key -> IO MetaFile  
-cleanFile key = do
-  cacheDir <- getCacheDirectory key
-  return $ MetaFile $ cacheDir </> "c"
-
-dirtyFile :: Key -> IO MetaFile  
-dirtyFile key = do
-  cacheDir <- getCacheDirectory key
-  return $ MetaFile $ cacheDir </> "d"
-
---dirtyFile :: MetaDir -> IO MetaFile 
---dirtyFile metaDepsDir = f metaDepsDir =<< getEnv "REDO_SESSION"
---  where f depDir session = return $ MetaFile $ unMetaDir depDir </> ".drt." ++ session  ++ ".drt."
-
--- Construct file for storing built timestamp
-builtFile :: MetaDir -> MetaFile  
-builtFile metaDepsDir = MetaFile $ unMetaDir metaDepsDir </> ".blt.blt."
+    hasDependencies t = do
+      key <- getKey t
+      doesDirectoryExist =<< getDatabaseDirectory key
 
 ---------------------------------------------------------------------
 -- Functions escaping and unescaping path names
@@ -604,12 +415,8 @@ unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
                       else (x, xs)
 
 -- Functions to escape and unescape dependencies of different types:
-escapeIfChangePath :: FilePath -> FilePath
-escapeIfChangePath = escapeDependencyPath ifchange_dependency_prepend
 unEscapeIfChangePath :: FilePath -> FilePath 
 unEscapeIfChangePath = unEscapeDependencyPath ifchange_dependency_prepend
-escapeIfCreatePath :: FilePath -> FilePath
-escapeIfCreatePath = escapeDependencyPath ifcreate_dependency_prepend
 unEscapeIfCreatePath :: FilePath -> FilePath 
 unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 
@@ -624,14 +431,6 @@ storeIfChangeDependencies = storeDependencies storeIfChangeDep
 storeIfCreateDependencies :: [Target] -> IO ()
 storeIfCreateDependencies = storeDependencies storeIfCreateDep
 
--- Return some redo environment vaiables
-getRedoEnv :: IO (FilePath, MetaDir)
-getRedoEnv = do
-  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
-  parentRedoTarget <- getEnv "REDO_TARGET"
-  parentRedoMetaDir <- metaDir $ Target parentRedoTarget
-  return (parentRedoPath, parentRedoMetaDir)
-
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
 storeAlwaysDependency = do 
@@ -643,28 +442,12 @@ storeAlwaysDependency = do
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
-  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
+  parentRedoTarget <- getEnv "REDO_TARGET"
+  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
   -- todo cleanup this geEnv
-  parentRedoTarget <- getEnv "REDO_TARGET"
   key <- getKey $ Target parentRedoTarget
   mapM_ (storeAction key) dependenciesRel2Parent
-  where
-    makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
-    makeRelativeToParent parent targets = do
-      currentDir <- getCurrentDirectory
-      -- Note: All target listed here are relative to the current directory in the .do script. This could
-      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
-      -- if 'cd' was used in the .do script.
-      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
-      return $ map (Target . makeRelative parent . (currentDir </>) . unTarget) targets
-
-
-storeDependencies' :: (MetaDir -> Target -> IO ()) -> [Target] -> IO ()  
-storeDependencies' storeAction dependencies = do 
-  (parentRedoPath, parentRedoMetaDir) <- getRedoEnv
-  dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
-  mapM_ (storeAction parentRedoMetaDir) dependenciesRel2Parent
   where
     makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
     makeRelativeToParent parent targets = do
