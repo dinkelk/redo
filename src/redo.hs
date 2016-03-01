@@ -140,8 +140,9 @@ mainTop progName targets = do
         check target = do 
           -- If the user is trying to build a source file, then exit with an error
           -- else, continue to run the action on the target
-          isSource <- isSourceFile target
-          when isSource $ do
+          -- TODO this is likely broken... can this not be done internally?
+          source <- isSourceFile target
+          when source $ do
             putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' exists and is marked as a source file. Not redoing."
             putWarningStrLn $ "If you believe '" ++ unTarget target ++ "' is buildable, remove it and try again."
             exitFailure
@@ -161,7 +162,6 @@ mainDo progName targets =
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
     "redo-ifchange" -> do exitCode <- redoIfChange targets
-                          -- bug, this needs to run even if the first thing fails
                           storeIfChangeDependencies targets
                           exitWith exitCode
     -- Store redo-ifcreate dependencies for each target in the parent target's directory

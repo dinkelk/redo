@@ -1,11 +1,11 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database (getDatabaseDirectory, clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markClean, unEscapeDependencyPath, removeDatabaseDirectory,
-                     markDirty, storeStamp, ifChangeMetaFileToTarget,
-                     ifCreateMetaFileToTarget, getBuiltTargetPath, isDirty, 
-                     isClean, getCachedDoFile, getStamp, getIfChangeEntry, 
+module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
+                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markClean, unEscapeDependencyPath, removeDatabase,
+                     markDirty, storeStamp, doesDatabaseExist,
+                     getBuiltTargetPath, isDirty, initializeSourceDatabase,
+                     isClean, getDoFile, getStamp, getIfChangeEntry, isSource,
                      isSourceFile, LockFile(..), MetaFile(..), Key(..), getKey) where
 
 import Control.Applicative ((<$>))
@@ -27,7 +27,7 @@ import Types
 ---------------------------------------------------------------------
 -- Type Definitions:
 ---------------------------------------------------------------------
-newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The data base key for a target
+newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The database key for a target
 newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
 
@@ -37,14 +37,6 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- 
 -- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
 #define seperator_replacement '^'
 #define seperator_replacement_escape '@'
-
--- We use different file prepends to denote different kinds of dependencies:
--- ~ redo-always
--- % redo-ifcreate
--- @ redo-ifchange
-#define ifchange_dependency_prepend '@'
-#define ifcreate_dependency_prepend '%'
-#define always_dependency_prepend '~'
 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
@@ -72,28 +64,9 @@ redoLockFileDirectory = do
   root <- redoMetaDirectory
   return $ root </> "locks"
 
--- Create meta data folder for storing hashes and/or timestamps and return the folder name
--- We store a dependency for the target on the do file
--- Note: this function also blows out the old directory, which is good news because we don't want old
--- dependencies hanging around if we are rebuilding a file.
-initializeDatabase :: Key -> Target -> DoFile -> IO ()
-initializeDatabase key target doFile = do
-  clearDatabaseDirectory key
-  createDatabaseDirectory key
-  -- Write out .do script as dependency:
-  storeIfChangeDep key (Target $ unDoFile doFile)
-  -- Write out target name:
-  storeTarget key target
-  -- Cache the do file:
-  storeDoFile key doFile
-
 ---------------------------------------------------------------------
 -- Functions clearing meta data information
 ---------------------------------------------------------------------
--- Clear a database entry
-clearDatabaseDirectory :: Key -> IO ()
-clearDatabaseDirectory key = safeRemoveDirectoryRecursive =<< getDatabaseDirectory key
-
 -- Clear the entire redo cache directory:
 clearCache :: IO ()
 clearCache = safeRemoveDirectoryRecursive =<< redoCacheDirectory
@@ -126,24 +99,62 @@ hashString target = do
 -- Functions getting database entries:
 ---------------------------------------------------------------------
 -- Get the database directory for a target:
-getDatabaseDirectory :: Key -> IO FilePath
-getDatabaseDirectory key = do
+getDatabase :: Key -> IO FilePath
+getDatabase key = do
   databaseDirectory <- redoDatabaseDirectory
   return $ databaseDirectory </> keyToFilePath key
 
 -- Create the database directory for a target:
-createDatabaseDirectory :: Key -> IO ()
-createDatabaseDirectory key = safeCreateDirectoryRecursive =<< getDatabaseDirectory key
+createDatabase :: Key -> IO ()
+createDatabase key = safeCreateDirectoryRecursive =<< getDatabase key
 
 -- Remove a database directory:
-removeDatabaseDirectory :: Key -> IO ()
-removeDatabaseDirectory key = safeRemoveDirectoryRecursive =<< getDatabaseDirectory key
+removeDatabase :: Key -> IO ()
+removeDatabase key = safeRemoveDirectoryRecursive =<< getDatabase key
+
+-- Remove and then create a database directory:
+refreshDatabase :: Key -> IO ()
+refreshDatabase key = do
+  removeDatabase key
+  createDatabase key
+
+-- Create meta data folder for storing hashes and/or timestamps and return the folder name
+-- We store a dependency for the target on the do file
+-- Note: this function also blows out the old directory, which is good news because we don't want old
+-- dependencies hanging around if we are rebuilding a file.
+initializeTargetDatabase :: Key -> Target -> DoFile -> IO ()
+initializeTargetDatabase key target doFile = do
+  refreshDatabase key
+  -- Write out .do script as dependency:
+  storeIfChangeDep key (Target $ unDoFile doFile)
+  -- Write out target name:
+  storeTarget key target
+  -- Cache the do file:
+  storeDoFile key doFile
+
+initializeSourceDatabase :: Key -> Target -> IO ()
+initializeSourceDatabase key target = do
+  refreshDatabase key
+  -- Write out the source file stamp:
+  storeStamp key target
+  -- Write out the source file name:
+  storeTarget key target
+  -- Mark this target as source:
+  markSource key
+
+-- Get the database directory for a target:
+doesDatabaseExist :: Key -> IO Bool
+doesDatabaseExist key = doesDirectoryExist =<< getDatabase key
 
 -- Generic function for getting a database entry with a certain name:
 getDatabaseEntry :: FilePath -> Key -> IO Entry
 getDatabaseEntry name key = do
-  dbDir <- getDatabaseDirectory key
+  dbDir <- getDatabase key
   return $ Entry $ dbDir </> name
+
+-- Get the database entry for a target's ifchange dependencies:
+getSourceEntry :: Key -> IO Entry
+getSourceEntry = getDatabaseEntry "y"
 
 -- Get the database entry for a target's ifchange dependencies:
 getIfChangeEntry :: Key -> IO Entry
@@ -177,15 +188,15 @@ getTargetEntry = getDatabaseEntry "t"
 -- Functions getting database entries:
 ---------------------------------------------------------------------
 -- Get the cache directory for a target:
-getCacheDirectory :: Key -> IO FilePath
-getCacheDirectory key = do
+getCacheDatabase :: Key -> IO FilePath
+getCacheDatabase key = do
   cacheDir <- redoCacheDirectory
   return $ cacheDir </> keyToFilePath key
 
 -- Generic function for getting a cache entry with a certain name:
 getCacheEntry :: FilePath -> Key -> IO Entry
 getCacheEntry name key = do
-  cacheDir <- getCacheDirectory key
+  cacheDir <- getCacheDatabase key
   return $ Entry $ cacheDir </> name
 
 -- Get the entry for marking a target clean:
@@ -200,34 +211,19 @@ getDirtyEntry = getCacheEntry "d"
 -- Functions getting lock files:
 ---------------------------------------------------------------------
 -- Get the lock file directory for a target:
-getLockFileDirectory :: Key -> IO FilePath
-getLockFileDirectory key = do
+getLockFileDatabase :: Key -> IO FilePath 
+getLockFileDatabase key = do
   lockFileDir <- redoLockFileDirectory
   return $ lockFileDir </> keyToFilePath key
 
 ---------------------------------------------------------------------
 -- Functions writing meta files:
 ---------------------------------------------------------------------
--- Store the stamp of a dependency if it exists. If it does not exist, then we store a blank stamp file
--- because the target still depenends on this target, it just failed to built last time, so we store a
--- blank (bad) stamp that will never match a successfully built target
-storeIfChangeDep :: Key -> Target -> IO ()
-storeIfChangeDep key dep = maybe (storeIfChangeDepBad' key dep) (storeIfChangeDep' key) =<< getBuiltTargetPath' dep
-
-storeIfChangeDep' :: Key -> Target -> IO () 
-storeIfChangeDep' key target = do
-  -- TODO remove the stamping after links are in place...
-  stamp <- stampTarget target
+storeIfChangeDep :: Key -> Target -> IO () 
+storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
-  appendEntry (Entry ((entryToFilePath ifChangeEntry) </> (escapeDependencyPath '@' $ unTarget target))) 
-              (escapeDependencyPath '@' $ unStamp stamp)
-
-storeIfChangeDepBad' :: Key -> Target -> IO () 
-storeIfChangeDepBad' key target = do
-  -- TODO remove the stamping after links are in place...
-  ifChangeEntry <- getIfChangeEntry key
-  appendEntry (Entry ((entryToFilePath ifChangeEntry) </> (escapeDependencyPath '@' $ unTarget target))) 
-              (escapeDependencyPath '@' $ "jibberish")
+  -- TODO... maybe just store the key instead?
+  appendEntry ifChangeEntry (escapeDependencyPath '@' $ unTarget dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
@@ -240,12 +236,16 @@ storeIfCreateDep' key target = do
   appendEntry ifCreateDir (escapeDependencyPath '@' $ unTarget target)
 
 storeAlwaysDep :: Key -> IO () 
-storeAlwaysDep key = do
-  alwaysEntry <- getAlwaysEntry key
-  createEntry alwaysEntry
+storeAlwaysDep key = createEntry =<< getAlwaysEntry key
 
 hasAlwaysDep :: Key -> IO Bool
 hasAlwaysDep key = doesEntryExist =<< getAlwaysEntry key
+
+markSource :: Key -> IO () 
+markSource key = createEntry =<< getSourceEntry key
+
+isSource :: Key -> IO Bool
+isSource key = doesEntryExist =<< getSourceEntry key
 
 getIfCreateDeps :: Key -> IO [MetaFile]
 getIfCreateDeps key = do
@@ -283,12 +283,10 @@ storePhonyTarget key = do
   writeEntry phonyTargetDir (escapeDependencyPath '@' $ ".")
 
 markClean :: Key -> IO ()
-markClean key =
-  createEntry =<< getCleanEntry key
+markClean key = createEntry =<< getCleanEntry key
 
 markDirty :: Key -> IO ()
-markDirty key =
-  createEntry =<< getDirtyEntry key
+markDirty key = createEntry =<< getDirtyEntry key
 
 storeDoFile :: Key -> DoFile -> IO ()
 storeDoFile key doFile = do
@@ -323,7 +321,7 @@ createLockFile target = do
 
 createLockFile' :: Key -> IO LockFile
 createLockFile' key = do 
-  lockFileDir <- getLockFileDirectory key
+  lockFileDir <- getLockFileDatabase key
   -- TODO cleanup:
   safeCreateDirectoryRecursive lockFileDir 
   return $ LockFile $ lockFileDir </> "l"
@@ -338,8 +336,8 @@ isDirty :: Key -> IO Bool
 isDirty key = doesEntryExist =<< getDirtyEntry key
 
 -- Retrieve the cached do file path inside meta dir
-getCachedDoFile :: Key -> IO (Maybe DoFile)
-getCachedDoFile key = do
+getDoFile :: Key -> IO (Maybe DoFile)
+getDoFile key = do
   doFileDir <- getDoFileEntry key
   catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
   where readDoFile dir = do doFile <- readEntry1 dir
@@ -354,12 +352,9 @@ getBuiltTargetPath key target = do
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
         returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
 
-getBuiltTargetPath' :: Target -> IO(Maybe Target)
-getBuiltTargetPath' target = do key <- getKey target
-                                getBuiltTargetPath key target
-
 -- Does the target file or directory exist on the filesystem?
 -- Checks if a target file is a buildable target, or if it is a source file
+-- TODO this is probably broken
 isSourceFile :: Target -> IO Bool
 isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< doesTargetExist target
   where
@@ -367,17 +362,11 @@ isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< d
     hasDependencies :: Target -> IO Bool
     hasDependencies t = do
       key <- getKey t
-      doesDirectoryExist =<< getDatabaseDirectory key
+      doesDirectoryExist =<< getDatabase key
 
 ---------------------------------------------------------------------
 -- Functions escaping and unescaping path names
 ---------------------------------------------------------------------
-ifChangeMetaFileToTarget :: FilePath -> MetaFile -> Target
-ifChangeMetaFileToTarget doDirectory metaFile = Target $ removeDotDirs $ doDirectory </> unEscapeIfChangePath (unMetaFile metaFile)
-
-ifCreateMetaFileToTarget :: FilePath -> MetaFile -> Target
-ifCreateMetaFileToTarget doDirectory metaFile = Target $ removeDotDirs $ doDirectory </> unEscapeIfCreatePath (unMetaFile metaFile)
-
 -- This is the same as running normalise, but it always removes the trailing path
 -- separator, and it always keeps a "./" in front of things in the current directory
 -- and always removes "./" in front of things not in the current directory.
@@ -394,6 +383,7 @@ escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) +
         repl c   = if isPathSeparator c then [seperator_replacement] else [c]
 
 -- Reverses escapeFilePath
+-- TODO remove dep prepend and . from these functions
 unEscapeDependencyPath :: Char -> FilePath -> FilePath
 unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
   where 
@@ -409,12 +399,6 @@ unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
                            then (seperator_replacement, tail xs)
                            else (pathSeparator, xs)
                       else (x, xs)
-
--- Functions to escape and unescape dependencies of different types:
-unEscapeIfChangePath :: FilePath -> FilePath 
-unEscapeIfChangePath = unEscapeDependencyPath ifchange_dependency_prepend
-unEscapeIfCreatePath :: FilePath -> FilePath 
-unEscapeIfCreatePath = unEscapeDependencyPath ifcreate_dependency_prepend
 
 ---------------------------------------------------------------------
 -- Higher level functions

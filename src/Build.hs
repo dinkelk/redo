@@ -40,12 +40,16 @@ redoIfChange = buildTargets redoIfChange'
       upToDate' <- upToDate target
       -- Try to run redo if out of date, if it fails, print an error message:
       unless' upToDate' (maybe (missingDo target) (build target) =<< findDoFile target)
+    -- Custom unless which return ExitSuccess if the condition is met
+    unless' condition action = if condition then return ExitSuccess else action
     -- If a do file is not found then return an error message, unless the file exists,
     -- in which case it is a source file and does not need to be rebuilt
     missingDo target = do exists <- doesTargetExist target
-                          unless' exists (noDoFileError target)
-    -- Custom unless which return ExitSuccess if the condition is met
-    unless' condition action = if condition then return ExitSuccess else action
+                          if exists then do
+                            key <- getKey target 
+                            initializeSourceDatabase key target
+                            return ExitSuccess
+                          else noDoFileError target
 
 -- Lock a file and run a function that takes that file as input.
 -- If the file is already locked, skip running the function on that
@@ -164,8 +168,12 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
-  -- Create the meta deps dir:
-  initializeDatabase key target doFile
+  -- Create the target database:
+  initializeTargetDatabase key target doFile
+
+  -- Create the dofile database:
+  doFileKey <- getKey $ Target $ unDoFile doFile
+  initializeSourceDatabase doFileKey $ Target $ unDoFile doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
