@@ -1,9 +1,9 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module MetaDirectory(getDatabaseDirectory, clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markTargetClean, unEscapeDependencyPath, removeDatabaseDirectory,
-                     markTargetDirty, storeStamp, ifChangeMetaFileToTarget,
+module Database (getDatabaseDirectory, clearCache, clearLockFiles, redoMetaDirectory, initializeDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
+                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markClean, unEscapeDependencyPath, removeDatabaseDirectory,
+                     markDirty, storeStamp, ifChangeMetaFileToTarget,
                      ifCreateMetaFileToTarget, getBuiltTargetPath, isDirty, 
                      isClean, getCachedDoFile, getStamp, getIfChangeEntry, 
                      isSourceFile, LockFile(..), MetaFile(..), Key(..), getKey) where
@@ -282,15 +282,12 @@ storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
   writeEntry phonyTargetDir (escapeDependencyPath '@' $ ".")
 
--- TODO make these functions match the rest
-markTargetClean :: Key -> IO ()
-markTargetClean key =
-  --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
+markClean :: Key -> IO ()
+markClean key =
   createEntry =<< getCleanEntry key
 
-markTargetDirty :: Key -> IO ()
-markTargetDirty key =
-  --removeSessionFiles metaDepsDir -- We don't need to do this, so I am optmizing it out since it take a long time
+markDirty :: Key -> IO ()
+markDirty key =
   createEntry =<< getDirtyEntry key
 
 storeDoFile :: Key -> DoFile -> IO ()
@@ -307,7 +304,6 @@ storeStamp :: Key -> Target -> IO ()
 storeStamp key target = do
   stamp <- stampTarget target
   stampDir <- getStampEntry key
-  -- TODO fix this the redundant unpack here
   writeEntry stampDir (unStamp stamp)
 
 -- Get the cached timestamp for when a target was last built. Return '.'

@@ -14,7 +14,7 @@ import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
 
 -- Local imports:
-import MetaDirectory
+import Database
 import PrettyPrint
 import Build
 import Types

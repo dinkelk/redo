@@ -20,7 +20,7 @@ import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 
 -- Local imports:
 import Types
-import MetaDirectory
+import Database 
 import UpToDate
 import PrettyPrint
 import Helpers
@@ -183,13 +183,13 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> do exitCode <- moveTempFiles 
-                      markTargetClean key -- we just built this target, so we know it is clean now
+                      markClean key -- we just built this target, so we know it is clean now
                       -- If the target exists, then mark the target built with its timestamp
                       targetExists <- doesTargetExist target
                       when targetExists (storeStamp key target)
                       removeTempFiles target
                       return exitCode
-    ExitFailure code -> do markTargetDirty key -- we failed to build this target, so mark it dirty
+    ExitFailure code -> do markDirty key -- we failed to build this target, so mark it dirty
                            removeTempFiles target
                            redoError code $ nonZeroExitStr code
   where

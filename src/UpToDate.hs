@@ -10,7 +10,7 @@ import System.Directory (doesDirectoryExist)
 
 import Helpers
 import Types
-import MetaDirectory
+import Database 
 import DatabaseEntry
 import PrettyPrint
 
@@ -170,10 +170,10 @@ ifChangeDepsUpToDate level parentKey doDir hashFile = do
 
 -- Helper function which returns true and marks the target as clean:
 returnTrue :: Key -> IO Bool
-returnTrue key = markTargetClean key >> return True
+returnTrue key = markClean key >> return True
 -- Helper function which returns false and marks the target as dirty:
 returnFalse :: Key -> IO Bool
-returnFalse key = markTargetDirty key >> return False
+returnFalse key = markDirty key >> return False
 
 -- Helper for debugging:
 debugUpToDate :: Int -> Target -> c -> String -> c
