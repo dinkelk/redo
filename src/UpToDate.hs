@@ -43,9 +43,9 @@ upToDate' level target = do
         else do 
           cachedStamp <- getStamp key
           currentStamp <- safeStampTarget (fromJust existingTarget)
-          putWarningStrLn $ "target: " ++ unTarget target
-          putWarningStrLn $ "cachedStamp : " ++ show cachedStamp
-          putWarningStrLn $ "currentStamp: " ++ show currentStamp
+          --putWarningStrLn $ "target: " ++ unTarget target
+          --putWarningStrLn $ "cachedStamp : " ++ show cachedStamp
+          --putWarningStrLn $ "currentStamp: " ++ show currentStamp
           -- The target has been modified because the timestamps dont match
           if cachedStamp /= currentStamp then returnFalse key `debug'` "-modified"
           else do 
@@ -86,9 +86,6 @@ upToDate'' level target key = do
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: DoFile -> IO Bool
     newDoFile doFile = do
-      storedDo <- getDoFile key
-      putWarningStrLn $ "dofile: " ++ show doFile
-      putWarningStrLn $ "stored: " ++ show storedDo
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
       if takeExtension (unTarget target) == ".do" then return False

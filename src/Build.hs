@@ -137,11 +137,13 @@ runDoFile target doFile = do
   cachedStamp <- getStamp key
   currentStamp <- safeStampTarget target
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-  putStatusStrLn $ "target: " ++ unTarget target
-  putStatusStrLn $ "cachedStamp : " ++ show cachedStamp
-  putStatusStrLn $ "currentStamp: " ++ show currentStamp
+  -- TODO what about source files?
+  --putStatusStrLn $ "target: " ++ unTarget target
+  --putStatusStrLn $ "cachedStamp : " ++ show cachedStamp
+  --putStatusStrLn $ "currentStamp: " ++ show currentStamp
   -- TODO this is not working in all cases. consider marking the file as errored.
   if isJust currentStamp && cachedStamp /= currentStamp then targetModifiedError 
+  --if isJust currentStamp && isJust cachedStamp && cachedStamp /= currentStamp then targetModifiedError 
   else runDoFile' target doFile currentStamp targetIsDirectory key
   where
     targetModifiedError :: IO ExitCode
@@ -174,7 +176,6 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
-  -- TODO consider moving this to after the file is build successfully?
   -- Create the target database:
   initializeTargetDatabase key target doFile
 
@@ -211,6 +212,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
                                            unTarget target ++ "' with exit code: " ++ show code 
 
     -- Store the stamp of the built target and mark it as clean
+    -- consider storing timestamps in different place, so that they dont get blown away with initialization of db
     stampBuiltTarget builtTarget = do
       stamp <- stampTarget builtTarget
       storeStamp' key stamp

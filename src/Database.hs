@@ -45,11 +45,20 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- 
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
--- Directory for storing database entries for redo targets and sources
+-- Directory for storing dependency database entries for redo targets and sources
 redoDatabaseDirectory :: IO FilePath
 redoDatabaseDirectory = do
   root <- redoMetaDirectory
   return $ root </> "database"
+
+-- Directory for storing stamps of redo targets and sources. We need this to 
+-- persist failed builds, which is why it is not integrated into the database
+-- directory. The database directory is reset at the beginning of a rebuild 
+-- for a target.
+redoStampDirectory :: IO FilePath
+redoStampDirectory = do
+  root <- redoMetaDirectory
+  return $ root </> "stamps"
 
 -- Directory for storing single redo session cached information. This speeds up
 -- the upToDate function
@@ -169,10 +178,6 @@ getAlwaysEntry :: Key -> IO Entry
 getAlwaysEntry = getDatabaseEntry "a"
 
 -- Get the database entry for a target's always dependencies:
-getStampEntry :: Key -> IO Entry
-getStampEntry = getDatabaseEntry "s"
-
--- Get the database entry for a target's always dependencies:
 getPhonyTargetEntry :: Key -> IO Entry 
 getPhonyTargetEntry = getDatabaseEntry "p"
 
@@ -184,9 +189,18 @@ getDoFileEntry = getDatabaseEntry "d"
 getTargetEntry :: Key -> IO Entry
 getTargetEntry = getDatabaseEntry "t"
 
----------------------------------------------------------------------
--- Functions getting database entries:
----------------------------------------------------------------------
+-- Get the database directory for a target's stamp:
+getStampDatabase :: Key -> IO FilePath
+getStampDatabase key = do
+  stampDir <- redoStampDirectory 
+  return $ stampDir </> keyToFilePath key 
+
+-- Get the database entry for a target's stamp
+getStampEntry :: Key -> IO Entry
+getStampEntry key = do
+  stampDir <- getStampDatabase key
+  return $ Entry $ stampDir </> "s"
+
 -- Get the cache directory for a target:
 getCacheDatabase :: Key -> IO FilePath
 getCacheDatabase key = do
