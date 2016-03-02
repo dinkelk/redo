@@ -3,7 +3,7 @@
 
 module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
                      storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markClean, unEscapeDependencyPath, removeDatabase,
-                     markDirty, storeStamp, doesDatabaseExist,
+                     markDirty, storeStamp, storeStamp', doesDatabaseExist,
                      getBuiltTargetPath, isDirty, initializeSourceDatabase,
                      isClean, getDoFile, getStamp, getIfChangeEntry, isSource,
                      isSourceFile, LockFile(..), MetaFile(..), Key(..), getKey) where
@@ -301,6 +301,11 @@ storeTarget key target = do
 storeStamp :: Key -> Target -> IO ()
 storeStamp key target = do
   stamp <- stampTarget target
+  stampDir <- getStampEntry key
+  writeEntry stampDir (unStamp stamp)
+
+storeStamp' :: Key -> Stamp -> IO ()
+storeStamp' key stamp = do
   stampDir <- getStampEntry key
   writeEntry stampDir (unStamp stamp)
 

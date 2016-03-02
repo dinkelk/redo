@@ -6,10 +6,11 @@ module Build(redo, redoIfChange, makeRelative') where
 
 -- System imports:
 import Control.Applicative ((<$>))
-import Control.Monad (unless, when)
+import Control.Monad (unless)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
-import Data.Maybe (isNothing, fromJust, fromMaybe)
+import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
+import Data.Bool (bool)
 import System.Directory (removeDirectoryRecursive, doesDirectoryExist, setCurrentDirectory, renameFile, renameDirectory, removeFile, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..), exitFailure)
@@ -136,7 +137,12 @@ runDoFile target doFile = do
   cachedStamp <- getStamp key
   currentStamp <- safeStampTarget target
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-  whenEqualOrNothing cachedStamp currentStamp targetModifiedError (runDoFile' target doFile currentStamp targetIsDirectory key)
+  putStatusStrLn $ "target: " ++ unTarget target
+  putStatusStrLn $ "cachedStamp : " ++ show cachedStamp
+  putStatusStrLn $ "currentStamp: " ++ show currentStamp
+  -- TODO this is not working in all cases. consider marking the file as errored.
+  if isJust currentStamp && cachedStamp /= currentStamp then targetModifiedError 
+  else runDoFile' target doFile currentStamp targetIsDirectory key
   where
     targetModifiedError :: IO ExitCode
     targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
@@ -168,6 +174,7 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
+  -- TODO consider moving this to after the file is build successfully?
   -- Create the target database:
   initializeTargetDatabase key target doFile
 
@@ -191,22 +198,29 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> do exitCode <- moveTempFiles 
-                      markClean key -- we just built this target, so we know it is clean now
-                      -- If the target exists, then mark the target built with its timestamp
-                      targetExists <- doesTargetExist target
-                      when targetExists (storeStamp key target)
-                      removeTempFiles target
-                      return exitCode
+                      -- If the target exists, then store the target stamp
+                      maybe (nonZeroExitStr exitCode) (stampBuiltTarget) 
+                        =<< getBuiltTargetPath key target
+                      bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
     ExitFailure code -> do markDirty key -- we failed to build this target, so mark it dirty
                            removeTempFiles target
-                           redoError code $ nonZeroExitStr code
+                           nonZeroExitStr code
+                           return $ ExitFailure code
   where
-    nonZeroExitStr code = "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
-                          unTarget target ++ "' with exit code: " ++ show code 
+    nonZeroExitStr code = putErrorStrLn $ "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
+                                           unTarget target ++ "' with exit code: " ++ show code 
+
+    -- Store the stamp of the built target and mark it as clean
+    stampBuiltTarget builtTarget = do
+      stamp <- stampTarget builtTarget
+      storeStamp' key stamp
+      markClean key -- we just built this target, so we know it is clean now
+      removeTempFiles target
+      
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
-    moveTempFiles :: IO ExitCode
+    moveTempFiles :: IO Int
     moveTempFiles = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
@@ -214,15 +228,16 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
       newTimeStamp <- safeStampTarget target
       targetIsStillDirectory <- doesDirectoryExist $ unTarget target
       -- See if the user modified $1 directly... we don't care if the user modified a directory target however
-      if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then dollarOneModifiedError 
+      if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then 
+        dollarOneModifiedError >> return 1
       else 
         if tmp3Exists then do
           safeRenameFileOrDir tmp3 target
-          if stdoutExists && stdoutSize > 0 then wroteToStdoutError else return ExitSuccess
+          if stdoutExists && stdoutSize > 0 then wroteToStdoutError >> return 1 else return 0
         else if stdoutExists then
           -- If the user actually wrote data to standard out or built a directory on $1 then we just try to rename the file,
           -- and we leave a directory written on $1 alone.
-          if stdoutSize > 0 || targetIsStillDirectory then safeRenameFile tmpStdout target >> return ExitSuccess
+          if stdoutSize > 0 || targetIsStillDirectory then safeRenameFile tmpStdout target >> return 0
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
           -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
           -- target should be created. This is our way of denoting the file as correctly build! 
@@ -236,25 +251,25 @@ runDoFile' target doFile currentTimeStamp targetIsDirectory key = do
           -- instead store a phony target in the meta directory
           else do safeRemoveTempFile $ unTarget target
                   storePhonyTarget key
-                  return ExitSuccess
+                  return 0
         -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
-        else storePhonyTarget key >> return ExitSuccess
+        else storePhonyTarget key >> return 0
       where safeRenameFile :: FilePath -> Target -> IO ()
             safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
             safeRenameFileOrDir :: FilePath -> Target -> IO () 
             safeRenameFileOrDir old new = catch(renameFile old (unTarget new)) 
-              (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new) -- we need to remove the directory because renameDirectory does not overwrite on all platforms
+              -- we need to remove the directory because renameDirectory does not overwrite on all platforms
+              (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)                                                  
                                                  renameDirectory old (unTarget new) ) (\(_ :: SomeException) -> return ()))
     
-    wroteToStdoutError :: IO ExitCode
-    wroteToStdoutError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
-                                       "You should write status messages to stderr, not stdout." 
-    dollarOneModifiedError :: IO ExitCode
-    dollarOneModifiedError = redoError 1 $ "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
-                                           "You should update $3 (the temporary file) or stdout, not $1." 
-    redoError :: Int -> String -> IO ExitCode
-    redoError code message = do putErrorStrLn message
-                                return $ ExitFailure code
+    wroteToStdoutError :: IO ()
+    wroteToStdoutError = putErrorStrLn $
+      "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
+      "You should write status messages to stderr, not stdout." 
+    dollarOneModifiedError :: IO ()
+    dollarOneModifiedError = putErrorStrLn $ 
+      "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
+      "You should update $3 (the temporary file) or stdout, not $1." 
 
 -- Pass redo script 3 arguments:
 -- $1 - the target name

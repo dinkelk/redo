@@ -8,7 +8,7 @@ import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 -- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
+import System.Directory (doesDirectoryExist, getCurrentDirectory, createDirectoryIfMissing)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
@@ -67,6 +67,7 @@ getOptions argv =
 -- Main function:
 main :: IO ()
 main = do 
+
   args <- getArgs
   progName <- getProgName
 
@@ -109,14 +110,10 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
+
   -- Remove old lock files and other cached files:
   clearLockFiles
   clearCache
-
-  -- Set a unique session number for this session:
-  -- TODO remove
-  --sessionNumber <- randomRIO (0, 1000000000000::Int)
-  --setEnv "REDO_SESSION" (show sessionNumber)
 
   -- Perform the proper action based on the program name:
   case progName of 
@@ -158,7 +155,7 @@ mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> exitWith =<< redo targets
+    "redo" -> do exitWith =<< redo targets
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
     "redo-ifchange" -> do exitCode <- redoIfChange targets
