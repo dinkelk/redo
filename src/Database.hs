@@ -1,12 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, 
-                 hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, 
-                 createLockFile, markClean, unescapeFilePath, removeDatabase, storeIfCreateDep,
-                 markDirty, storeStamp, storeStamp', doesDatabaseExist, storeIfChangeDep, storeAlwaysDep,
-                 getBuiltTargetPath, isDirty, initializeSourceDatabase,
-                 isClean, getDoFile, getStamp, getIfChangeEntry, isSource,
-                 isTargetSource, LockFile(..), MetaFile(..), Key(..), getKey) where
+                 hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, storePhonyTarget, createLockFile, 
+                 markClean, storeIfCreateDep, markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, 
+                 storeAlwaysDep, getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, 
+                 getDoFile, getStamp, isSource, getKey, isTargetSource, LockFile(..), Key(..)) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -26,7 +24,6 @@ import Types
 -- Type Definitions:
 ---------------------------------------------------------------------
 newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The database key for a target
-newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
 
 ---------------------------------------------------------------------
@@ -136,7 +133,8 @@ initializeSourceDatabase :: Key -> Target -> IO ()
 initializeSourceDatabase key target = do
   refreshDatabase key
   -- Write out the source file stamp:
-  storeStamp key target
+  stamp <- stampTarget target
+  storeStamp key stamp
   -- Write out the source file name:
   storeTarget key target
   -- Mark this target as source:
@@ -252,34 +250,24 @@ markSource key = createEntry =<< getSourceEntry key
 isSource :: Key -> IO Bool
 isSource key = doesEntryExist =<< getSourceEntry key
 
-getIfCreateDeps :: Key -> IO [MetaFile]
+getIfCreateDeps :: Key -> IO [Target]
 getIfCreateDeps key = do
   ifCreateEntry <- getIfCreateEntry key
   getIfCreateDeps' ifCreateEntry
   where 
     getIfCreateDeps' entry = 
       catch (do files <- readEntry entry
-                return $ map (MetaFile . (unescapeFilePath)) files)
+                return $ map (Target. (unescapeFilePath)) files)
             (\(_ :: SomeException) -> return [])
 
-getIfChangeDeps :: Key -> IO [MetaFile]
+getIfChangeDeps :: Key -> IO [Target]
 getIfChangeDeps key = do
   ifChangeDir <- getIfChangeEntry key
   getIfChangeDeps' ifChangeDir
   where 
     getIfChangeDeps' dir = 
       catch (do files <- readEntry dir
-                return $ map (MetaFile . (unescapeFilePath)) files)
-            (\(_ :: SomeException) -> return [])
-
-getIfChangeDeps'' :: Key -> IO [MetaFile]
-getIfChangeDeps'' key = do
-  ifChangeDir <- getIfChangeEntry key
-  getIfChangeDeps' ifChangeDir
-  where 
-    getIfChangeDeps' dir = 
-      catch (do files <- readEntry dir
-                return $ map MetaFile files)
+                return $ map (Target . (unescapeFilePath)) files)
             (\(_ :: SomeException) -> return [])
 
 storePhonyTarget :: Key -> IO () 
@@ -303,14 +291,8 @@ storeTarget key target = do
   targetEntry <- getTargetEntry key
   writeEntry targetEntry (escapeFilePath $ unTarget target)
 
-storeStamp :: Key -> Target -> IO ()
-storeStamp key target = do
-  stamp <- stampTarget target
-  stampDir <- getStampEntry key
-  writeEntry stampDir (unStamp stamp)
-
-storeStamp' :: Key -> Stamp -> IO ()
-storeStamp' key stamp = do
+storeStamp :: Key -> Stamp -> IO ()
+storeStamp key stamp = do
   stampDir <- getStampEntry key
   writeEntry stampDir (unStamp stamp)
 

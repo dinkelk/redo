@@ -269,7 +269,7 @@ runDoFile' key target doFile currentTimeStamp targetIsDirectory = do
     -- consider storing timestamps in different place, so that they dont get blown away with initialization of db
     stampBuiltTarget builtTarget = do
       stamp <- stampTarget builtTarget
-      storeStamp' key stamp
+      storeStamp key stamp
       markClean key -- we just built this target, so we know it is clean now
       removeTempFiles target
       

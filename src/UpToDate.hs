@@ -114,7 +114,7 @@ depsUpToDate level target doFileDir key = do
       ifChangeDeps <- getIfChangeDeps key
       mapAnd ((upToDate' (level+1)) . makeAbsolute) ifChangeDeps 
   where 
-    makeAbsolute metaFile = Target $ removeDotDirs $ doFileDir </> (unMetaFile metaFile)
+    makeAbsolute dep = Target $ removeDotDirs $ doFileDir </> (unTarget dep)
     debug' = debugUpToDate level target
 
 -- Helper for debugging:
