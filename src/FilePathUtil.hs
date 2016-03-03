@@ -33,13 +33,14 @@ sanitizeFilePath filePath = normalise $ dir </> file
 -- Takes a file path and replaces all </> with @
 escapeFilePath :: FilePath -> FilePath
 escapeFilePath path = concatMap repl path'
-  where path' = sanitizeFilePath path
+  where --path' = sanitizeFilePath path
+        path' = path
         repl seperator_replacement = seperator_replacement : [seperator_replacement_escape]
         repl c   = if isPathSeparator c then [seperator_replacement] else [c]
 
 -- Reverses escapeFilePath
 unescapeFilePath :: FilePath -> FilePath
-unescapeFilePath name = sanitizeFilePath $ unEscape name
+unescapeFilePath name = unEscape name -- sanitizeFilePath $ unEscape name
   where 
     unEscape [] = []
     unEscape string = first : unEscape rest

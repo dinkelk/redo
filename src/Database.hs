@@ -78,6 +78,7 @@ clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
 -- Get the database for a given target:
 getKey :: Target -> IO Key
 getKey target =
+  -- TODO, this is now broken since I am storing keys as dirs
   --return $ Key $ pathify $ hashString target
   return $ Key $ hashString target
   where 
