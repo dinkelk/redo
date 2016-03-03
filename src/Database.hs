@@ -23,8 +23,8 @@ import Types
 ---------------------------------------------------------------------
 -- Type Definitions:
 ---------------------------------------------------------------------
-newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The database key for a target
-newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
+newtype Key = Key { keyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
+newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Show, Eq) -- A lock file for synchronizing access to meta directories
 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
@@ -78,7 +78,8 @@ clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
 -- Get the database for a given target:
 getKey :: Target -> IO Key
 getKey target =
-  return $ Key $ pathify $ hashString target
+  --return $ Key $ pathify $ hashString target
+  return $ Key $ hashString target
   where 
     pathify "" = ""
     pathify string = x </> pathify xs
@@ -239,25 +240,27 @@ getStamp key = catch (
      return $ Just $ Stamp contents)
   (\(_ :: SomeException) -> return Nothing)
 
-getIfCreateDeps :: Key -> IO [Target]
+getIfCreateDeps :: Key -> IO [(Key, Target)]
 getIfCreateDeps key = do
   ifCreateEntry <- getIfCreateEntry key
   getIfCreateDeps' ifCreateEntry
-  where 
-    getIfCreateDeps' entry = 
-      catch (do files <- readEntry entry
-                return $ map (Target . unescapeFilePath) files)
-            (\(_ :: SomeException) -> return [])
+  where getIfCreateDeps' entry = 
+          catch (do 
+            strings <- readFileEntry entry
+            return $ map convert strings)
+          (\(_ :: SomeException) -> return [])
+        convert (a1, a2) = (Key a1, Target a2)
 
-getIfChangeDeps :: Key -> IO [Target]
+getIfChangeDeps :: Key -> IO [(Key, Target)]
 getIfChangeDeps key = do
   ifChangeDir <- getIfChangeEntry key
   getIfChangeDeps' ifChangeDir
-  where 
-    getIfChangeDeps' dir = 
-      catch (do files <- readEntry dir
-                return $ map (Target . unescapeFilePath) files)
-            (\(_ :: SomeException) -> return [])
+  where getIfChangeDeps' entry =
+          catch (do 
+            strings <- readFileEntry entry
+            return $ map convert strings)
+          (\(_ :: SomeException) -> return [])
+        convert (a1, a2) = (Key a1, Target a2)
 
 isClean :: Key -> IO Bool 
 isClean key = doesEntryExist =<< getCleanEntry key
@@ -281,6 +284,13 @@ getBuiltTargetPath key target = do
   returnTargetIfExists (returnPhonyIfExists (return Nothing) phonyEntry) target
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
         returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
+
+getTarget :: Key -> IO Target
+getTarget key = do
+  targetEntry <- getTargetEntry key
+  readEntry targetEntry
+  where readEntry dir = do target <- readEntry1 dir
+                           return $ Target $ unescapeFilePath target
 ---------------------------------------------------------------------
 
 -- Functions writing database entries:
@@ -288,7 +298,8 @@ getBuiltTargetPath key target = do
 storeIfChangeDep :: Key -> Target -> IO () 
 storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
-  appendEntry ifChangeEntry (escapeFilePath $ unTarget dep)
+  depKey <- getKey dep
+  appendFileEntry ifChangeEntry (keyToFilePath depKey) (unTarget dep) -- TODO (escapeFilePath $ unTarget dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
@@ -296,9 +307,10 @@ storeIfCreateDep key dep = bool (storeIfCreateDep' key dep)
   (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
 
 storeIfCreateDep' :: Key -> Target -> IO () 
-storeIfCreateDep' key target = do
+storeIfCreateDep' key dep = do
   ifCreateDir <- getIfCreateEntry key
-  appendEntry ifCreateDir (escapeFilePath $ unTarget target)
+  depKey <- getKey dep
+  appendFileEntry ifCreateDir (keyToFilePath depKey) (unTarget dep) -- (escapeFilePath $ unTarget target)
 
 storeAlwaysDep :: Key -> IO () 
 storeAlwaysDep key = createEntry =<< getAlwaysEntry key

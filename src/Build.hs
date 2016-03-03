@@ -45,18 +45,11 @@ storeAlwaysDependency = do
 storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
   key <- Key <$> getEnv "REDO_KEY"
-  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
-  dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
-  mapM_ (storeAction key) dependenciesRel2Parent
-  where
-    makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
-    makeRelativeToParent parent targets = do
-      currentDir <- getCurrentDirectory
-      -- Note: All target listed here are relative to the current directory in the .do script. This could
-      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
-      -- if 'cd' was used in the .do script.
-      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
-      return $ map (Target . makeRelative parent . (currentDir </>) . unTarget) targets
+  parentRedoPath <- getCurrentDirectory
+  canonicalizedDeps <- mapM (canonicalize parentRedoPath) dependencies
+  mapM_ (storeAction key) canonicalizedDeps
+  where canonicalize path dep = do cpath <- canonicalizePath' $ path </> unTarget dep
+                                   return $ Target $ cpath
 
 -- Returns true if program was invoked from within a .do file, false if run from commandline
 isRunFromDoFile :: IO Bool
@@ -126,7 +119,7 @@ redoIfChange = buildTargets redoIfChange'
           modified <- isTargetModified key currentStamp
           if modified then targetModifiedWarning target
           else do
-            --putStatusStrLn $ "redo-ifchange " ++ target
+            --putStatusStrLn $ "redo-ifchange " ++ unTarget target
             upToDate' <- upToDate key target
             -- Try to run redo if out of date, if it fails, print an error message:
             unless' upToDate' (maybe (missingDo key target) (build key target currentStamp) =<< findDoFile target)

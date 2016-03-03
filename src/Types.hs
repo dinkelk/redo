@@ -19,7 +19,7 @@ import FilePathUtil
 ---------------------------------------------------------------------
 newtype Stamp = Stamp { unStamp :: String } deriving (Show, Eq) -- Timestamp or hash stamp of a file
 newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Show, Eq) -- The absolute path to a do file
-newtype Target = Target { unTarget :: FilePath } deriving (Eq) -- The absolute path to a target file
+newtype Target = Target { unTarget :: FilePath } deriving (Show, Eq) -- The absolute path to a target file
 
 -- Common functions that use these types:
 ---------------------------------------------------------------------

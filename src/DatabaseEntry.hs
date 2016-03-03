@@ -1,12 +1,14 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
+module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry,
+                     appendFileEntry, readFileEntry) where
 
 import System.Directory (getDirectoryContents, doesDirectoryExist)
 import System.FilePath ((</>))
 
 import FilePathUtil
+import PrettyPrint
 
 ---------------------------------------------------------------------
 -- Type Definitions:
@@ -45,15 +47,33 @@ appendEntry entry contents =
         dir = entry' </> contents
 
 -- Read the first value of the entry
-readEntry1 :: Entry -> IO FilePath
+readEntry1 :: Entry -> IO String
 readEntry1 entry = do
   contents <- getDirectoryContents entry'
   return $ contents !! 2
   where entry' = entryToFilePath entry
 
 -- Read all of the values from an entry
-readEntry :: Entry -> IO [FilePath]
+readEntry :: Entry -> IO [String]
 readEntry entry = do
   contents <- getDirectoryContents entry'
   return $ drop 2 contents
   where entry' = entryToFilePath entry
+
+appendFileEntry :: Entry -> String -> String -> IO ()
+appendFileEntry entry name contents = do
+  safeCreateDirectoryRecursive entry'
+  writeFile dir contents
+  where entry' = entryToFilePath entry
+        dir = entry' </> name
+
+-- Read all of the values from an entry
+readFileEntry :: Entry -> IO [(String, String)]
+readFileEntry entry = do
+  names' <- getDirectoryContents entry'
+  let names = drop 2 names'
+  a <- mapM extract names
+  return a
+  where entry' = entryToFilePath entry
+        extract file = do contents <- readFile $ entry' </> file
+                          return $ (file, contents)
