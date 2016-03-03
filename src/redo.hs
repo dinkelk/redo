@@ -6,9 +6,8 @@
 import Control.Monad (unless, when)
 import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
--- import Debug.Trace (traceShow)
 import System.Console.GetOpt
-import System.Directory (doesDirectoryExist, getCurrentDirectory, createDirectoryIfMissing)
+import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
@@ -30,13 +29,6 @@ printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts
                                                        exitSuccess
                                                else ioError (userError (concat errs ++ helpStr opts))
   where helpStr = usageInfo $ "Usage: " ++ programName ++ " [OPTION...] targets..."
-
--- Returns true if program was invoked from within a .do file, false if run from commandline
-isRunFromDoFile :: IO Bool
-isRunFromDoFile = do 
-  -- This is the top-level (first) call to redo by if REDO_TARGET does not yet exist.
-  redoTarget <- lookupEnv "REDO_TARGET"  
-  if isNothing redoTarget || null (fromJust redoTarget) then return False else return True
 
 -- Define program options:
 -- The arguments to Option are:
@@ -108,6 +100,7 @@ main = do
                    return $ if runFromDoFile then mainDo else mainTop
 
 -- The main function for redo run at a top level (outside of a .do file)
+-- TODO combine the two top functions
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
 
@@ -118,11 +111,9 @@ mainTop progName targets = do
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> do checkTargets targets'
-                 exitWith =<< redo targets'
+    "redo" -> exitWith =<< redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
-    "redo-ifchange" -> do checkTargets targets
-                          exitWith =<< redoIfChange targets
+    "redo-ifchange" -> exitWith =<< redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -130,20 +121,6 @@ mainTop progName targets = do
   where
     -- If just 'redo' is run, then assume the default target as 'all'
     targets' = if null targets then [Target "all"] else targets
-    -- Filter out targets that are not buildable:
-    checkTargets :: [Target] -> IO ()
-    checkTargets = mapM_ check
-      where
-        check target = do 
-          -- If the user is trying to build a source file, then exit with an error
-          -- else, continue to run the action on the target
-          -- TODO this is likely broken... can this not be done internally?
-          source <- isSourceFile target
-          when source $ do
-            putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' exists and is marked as a source file. Not redoing."
-            putWarningStrLn $ "If you believe '" ++ unTarget target ++ "' is buildable, remove it and try again."
-            exitFailure
-
     -- Print warning message if redo-always or redo-ifcreate are run outside of a .do file
     runOutsideDoError :: String -> IO ()
     runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."

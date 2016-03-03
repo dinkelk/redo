@@ -1,22 +1,20 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, storeIfChangeDependencies, storeIfCreateDependencies, 
-                     storeAlwaysDependency, hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, createLockFile, markClean, unEscapeDependencyPath, removeDatabase,
-                     markDirty, storeStamp, storeStamp', doesDatabaseExist,
-                     getBuiltTargetPath, isDirty, initializeSourceDatabase,
-                     isClean, getDoFile, getStamp, getIfChangeEntry, isSource,
-                     isSourceFile, LockFile(..), MetaFile(..), Key(..), getKey) where
+module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, 
+                 hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, getIfChangeDeps'', storePhonyTarget, 
+                 createLockFile, markClean, unescapeFilePath, removeDatabase, storeIfCreateDep,
+                 markDirty, storeStamp, storeStamp', doesDatabaseExist, storeIfChangeDep, storeAlwaysDep,
+                 getBuiltTargetPath, isDirty, initializeSourceDatabase,
+                 isClean, getDoFile, getStamp, getIfChangeEntry, isSource,
+                 isTargetSource, LockFile(..), MetaFile(..), Key(..), getKey) where
 
-import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import System.Directory (getAppUserDataDirectory, getCurrentDirectory, doesDirectoryExist)
-import System.FilePath (normalise, dropTrailingPathSeparator, makeRelative, splitFileName, (</>), isPathSeparator, pathSeparator)
-import System.Environment (getEnv)
+import System.Directory (getAppUserDataDirectory, doesDirectoryExist)
+import System.FilePath ((</>))
 import System.Exit (exitFailure)
 
 import DatabaseEntry
@@ -30,13 +28,6 @@ import Types
 newtype Key = Key { keyToFilePath :: FilePath } deriving (Eq) -- The database key for a target
 newtype MetaFile = MetaFile { unMetaFile :: FilePath } deriving (Eq) -- A meta file stored within a meta directory
 newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Eq) -- A lock file for synchronizing access to meta directories
-
----------------------------------------------------------------------
--- # Defines
----------------------------------------------------------------------
--- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
-#define seperator_replacement '^'
-#define seperator_replacement_escape '@'
 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
@@ -237,7 +228,7 @@ storeIfChangeDep :: Key -> Target -> IO ()
 storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
   -- TODO... maybe just store the key instead?
-  appendEntry ifChangeEntry (escapeDependencyPath '@' $ unTarget dep)
+  appendEntry ifChangeEntry (escapeFilePath $ unTarget dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
@@ -247,7 +238,7 @@ storeIfCreateDep key dep = bool (storeIfCreateDep' key dep)
 storeIfCreateDep' :: Key -> Target -> IO () 
 storeIfCreateDep' key target = do
   ifCreateDir <- getIfCreateEntry key
-  appendEntry ifCreateDir (escapeDependencyPath '@' $ unTarget target)
+  appendEntry ifCreateDir (escapeFilePath $ unTarget target)
 
 storeAlwaysDep :: Key -> IO () 
 storeAlwaysDep key = createEntry =<< getAlwaysEntry key
@@ -268,7 +259,7 @@ getIfCreateDeps key = do
   where 
     getIfCreateDeps' entry = 
       catch (do files <- readEntry entry
-                return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
+                return $ map (MetaFile . (unescapeFilePath)) files)
             (\(_ :: SomeException) -> return [])
 
 getIfChangeDeps :: Key -> IO [MetaFile]
@@ -278,7 +269,7 @@ getIfChangeDeps key = do
   where 
     getIfChangeDeps' dir = 
       catch (do files <- readEntry dir
-                return $ map (MetaFile . (unEscapeDependencyPath '@')) files)
+                return $ map (MetaFile . (unescapeFilePath)) files)
             (\(_ :: SomeException) -> return [])
 
 getIfChangeDeps'' :: Key -> IO [MetaFile]
@@ -294,7 +285,7 @@ getIfChangeDeps'' key = do
 storePhonyTarget :: Key -> IO () 
 storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
-  writeEntry phonyTargetDir (escapeDependencyPath '@' $ ".")
+  writeEntry phonyTargetDir (escapeFilePath $ ".")
 
 markClean :: Key -> IO ()
 markClean key = createEntry =<< getCleanEntry key
@@ -305,12 +296,12 @@ markDirty key = createEntry =<< getDirtyEntry key
 storeDoFile :: Key -> DoFile -> IO ()
 storeDoFile key doFile = do
   doFileDir <- getDoFileEntry key
-  writeEntry doFileDir (escapeDependencyPath '@' $ unDoFile doFile)
+  writeEntry doFileDir (escapeFilePath $ unDoFile doFile)
 
 storeTarget :: Key -> Target -> IO ()
 storeTarget key target = do
   targetEntry <- getTargetEntry key
-  writeEntry targetEntry (escapeDependencyPath '@' $ unTarget target)
+  writeEntry targetEntry (escapeFilePath $ unTarget target)
 
 storeStamp :: Key -> Target -> IO ()
 storeStamp key target = do
@@ -360,7 +351,7 @@ getDoFile key = do
   doFileDir <- getDoFileEntry key
   catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
   where readDoFile dir = do doFile <- readEntry1 dir
-                            return $ Just $ (DoFile $ unEscapeDependencyPath '@' doFile)
+                            return $ Just $ (DoFile $ unescapeFilePath doFile)
 
 -- Returns the path to the target, if it exists, otherwise it returns the path to the
 -- phony target if it exists, else return Nothing
@@ -373,86 +364,9 @@ getBuiltTargetPath key target = do
 
 -- Does the target file or directory exist on the filesystem?
 -- Checks if a target file is a buildable target, or if it is a source file
--- TODO this is probably broken
-isSourceFile :: Target -> IO Bool
-isSourceFile target = bool (return False) (not <$> hasDependencies target) =<< doesTargetExist target
-  where
-    -- Check's if a target has dependencies stored already
-    hasDependencies :: Target -> IO Bool
-    hasDependencies t = do
-      key <- getKey t
-      doesDirectoryExist =<< getDatabase key
-
----------------------------------------------------------------------
--- Functions escaping and unescaping path names
----------------------------------------------------------------------
--- This is the same as running normalise, but it always removes the trailing path
--- separator, and it always keeps a "./" in front of things in the current directory
--- and always removes "./" in front of things not in the current directory.
--- we use this to ensure consistancy of naming convention
-sanitizeFilePath :: FilePath -> FilePath
-sanitizeFilePath filePath = normalise $ dir </> file
-  where (dir, file) = splitFileName . dropTrailingPathSeparator . normalise $ filePath
-
--- Takes a file path and replaces all </> with @
-escapeDependencyPath :: Char -> FilePath -> FilePath
-escapeDependencyPath dependency_prepend path = (['.'] ++ [dependency_prepend]) ++ concatMap repl path' ++ ([dependency_prepend] ++ ['.'])
-  where path' = sanitizeFilePath path
-        repl seperator_replacement = seperator_replacement : [seperator_replacement_escape]
-        repl c   = if isPathSeparator c then [seperator_replacement] else [c]
-
--- Reverses escapeFilePath
--- TODO remove dep prepend and . from these functions
-unEscapeDependencyPath :: Char -> FilePath -> FilePath
-unEscapeDependencyPath dependency_prepend name = sanitizeFilePath path
-  where 
-    path = if take 2 name == ('.' : [dependency_prepend]) then unEscape $ (dropEnd 2 . drop 2) name else name
-    dropEnd n list = take (length list - n) list
-    unEscape [] = []
-    unEscape string = first : unEscape rest
-      where
-        (first, rest) = repl string
-        repl [] = ('\0',"")
-        repl (x:xs) = if x == seperator_replacement
-                      then if head xs == seperator_replacement_escape
-                           then (seperator_replacement, tail xs)
-                           else (pathSeparator, xs)
-                      else (x, xs)
-
----------------------------------------------------------------------
--- Higher level functions
----------------------------------------------------------------------
--- Store dependencies for redo-ifchange:
-storeIfChangeDependencies :: [Target] -> IO ()
-storeIfChangeDependencies = storeDependencies storeIfChangeDep
-
--- Store dependencies for redo-ifcreate:
-storeIfCreateDependencies :: [Target] -> IO ()
-storeIfCreateDependencies = storeDependencies storeIfCreateDep
-
--- Store dependency for redo-always:
-storeAlwaysDependency :: IO ()
-storeAlwaysDependency = do 
-  parentRedoTarget <- getEnv "REDO_TARGET"
-  -- TODO: consider storing the key in the variable...
-  key <- getKey $ Target parentRedoTarget
-  storeAlwaysDep key
-
--- Store dependencies given a store action and a list of dependencies to store:
-storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
-storeDependencies storeAction dependencies = do 
-  parentRedoTarget <- getEnv "REDO_TARGET"
-  parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
-  dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
-  -- todo cleanup this geEnv
-  key <- getKey $ Target parentRedoTarget
-  mapM_ (storeAction key) dependenciesRel2Parent
-  where
-    makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
-    makeRelativeToParent parent targets = do
-      currentDir <- getCurrentDirectory
-      -- Note: All target listed here are relative to the current directory in the .do script. This could
-      -- be different than the REDO_PATH variable, which represents the directory where the .do was invoked 
-      -- if 'cd' was used in the .do script.
-      -- So, let's get a list of targets relative to the parent .do file invocation location, REDO_PATH
-      return $ map (Target . makeRelative parent . (currentDir </>) . unTarget) targets
+isTargetSource :: Target -> IO Bool
+isTargetSource target = bool (return False) (isTargetSource') =<< doesTargetExist target
+  where isTargetSource' = do key <- getKey target
+                             hasDB <- doesDatabaseExist key
+                             markedSource <- isSource key
+                             return $ not hasDB || markedSource

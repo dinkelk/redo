@@ -1,14 +1,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE CPP #-}
 
 module Helpers(debug, makeRelative', canonicalizePath', safeRemoveDirectoryRecursive, safeCreateDirectoryRecursive,
-               safeRemoveGlob, removeDotDirs, mapAnd, mapOr, whenEqualOrNothing) where
+               safeRemoveGlob, removeDotDirs, mapAnd, mapOr, escapeFilePath, unescapeFilePath) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..), catchJust)
 import Control.Monad (guard)
-import Data.Maybe (isNothing)
 import Debug.Trace (trace)
-import System.FilePath (joinPath, splitDirectories, (</>))
+import System.FilePath (joinPath, splitDirectories, normalise, dropTrailingPathSeparator, (</>), isPathSeparator, pathSeparator, splitFileName)
 import System.FilePath.Glob (globDir1, compile)
 import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
 import System.IO.Error (isDoesNotExistError)
@@ -84,10 +84,42 @@ mapOr func (x:xs) = do boolean <- func x
                        if boolean then return True
                        else mapOr func xs
 
--- Run an action if the both s1 and s2 are equal or if either is nothing
-whenEqualOrNothing :: (Eq s) => Maybe s -> Maybe s -> t -> t -> t
-whenEqualOrNothing s1 s2 failAction action =
-  if isNothing s1 || 
-     isNothing s2 || 
-     s1 == s2 then action
-  else failAction
+---------------------------------------------------------------------
+-- # Defines
+---------------------------------------------------------------------
+-- Some #defines used for creating escaped dependency filenames. We want to avoid /'s.
+#define seperator_replacement '^'
+#define seperator_replacement_escape '@'
+
+---------------------------------------------------------------------
+-- Functions escaping and unescaping path names
+---------------------------------------------------------------------
+-- This is the same as running normalise, but it always removes the trailing path
+-- separator, and it always keeps a "./" in front of things in the current directory
+-- and always removes "./" in front of things not in the current directory.
+-- we use this to ensure consistancy of naming convention
+sanitizeFilePath :: FilePath -> FilePath
+sanitizeFilePath filePath = normalise $ dir </> file
+  where (dir, file) = splitFileName . dropTrailingPathSeparator . normalise $ filePath
+
+-- Takes a file path and replaces all </> with @
+escapeFilePath :: FilePath -> FilePath
+escapeFilePath path = concatMap repl path'
+  where path' = sanitizeFilePath path
+        repl seperator_replacement = seperator_replacement : [seperator_replacement_escape]
+        repl c   = if isPathSeparator c then [seperator_replacement] else [c]
+
+-- Reverses escapeFilePath
+unescapeFilePath :: FilePath -> FilePath
+unescapeFilePath name = sanitizeFilePath $ unEscape name
+  where 
+    unEscape [] = []
+    unEscape string = first : unEscape rest
+      where
+        (first, rest) = repl string
+        repl [] = ('\0',"")
+        repl (x:xs) = if x == seperator_replacement
+                      then if head xs == seperator_replacement_escape
+                           then (seperator_replacement, tail xs)
+                           else (pathSeparator, xs)
+                      else (x, xs)
