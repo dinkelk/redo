@@ -5,10 +5,16 @@ module UpToDate (upToDate) where
 
 import Data.Maybe (isNothing, fromJust)
 import System.FilePath (takeDirectory, takeExtension, (</>))
+import Debug.Trace (trace)
 
-import Helpers
+import FilePathUtil
 import Types
 import Database 
+
+-- Debug helpers:
+debug :: c -> String -> c
+debug = flip trace
+--debug a b = a
 
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
@@ -123,3 +129,21 @@ debugUpToDate depth file a string = debug a (createSpaces (depth*2) ++ string ++
   where createSpaces num = concat $ replicate num " "
         stringWidth = 12 
         paddingToAppend = stringWidth - length string
+
+-- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation
+-- if a "False" is found. This helps prevent infinite loops if dependencies are circular.
+mapAnd :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
+mapAnd _ [] = return True
+mapAnd func (x:xs) = do boolean <- func x
+                        if boolean then mapAnd func xs
+                        -- Optimization: cut the evaluation short if a single False is found
+                        else return False
+-- Function which basically does "or `liftM` mapM" but has the optimization of not continuing evaluation
+-- if a "True" is found.
+mapOr :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
+mapOr _ [] = return False
+mapOr func (x:xs) = do boolean <- func x
+                       -- Optimization: cut the evaluation short if a single True is found
+                       if boolean then return True
+                       else mapOr func xs
+

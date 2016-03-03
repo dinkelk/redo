@@ -25,7 +25,7 @@ import Types
 import Database 
 import UpToDate
 import PrettyPrint
-import Helpers
+import FilePathUtil
 
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [Target] -> IO ()

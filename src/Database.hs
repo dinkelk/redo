@@ -17,7 +17,7 @@ import System.Exit (exitFailure)
 
 import DatabaseEntry
 import PrettyPrint
-import Helpers
+import FilePathUtil
 import Types
 
 ---------------------------------------------------------------------

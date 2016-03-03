@@ -12,7 +12,7 @@ import System.Directory (doesFileExist, doesDirectoryExist)
 import System.FilePath (takeExtensions, dropExtension, dropExtensions, isDrive, splitFileName, (</>), takeDirectory, pathSeparator)
 import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSize)
 
-import Helpers
+import FilePathUtil
 
 ---------------------------------------------------------------------
 -- Basic Redo Type Definitions:

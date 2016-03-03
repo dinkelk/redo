@@ -6,7 +6,7 @@ module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendE
 import System.Directory (getDirectoryContents, doesDirectoryExist)
 import System.FilePath ((</>))
 
-import Helpers
+import FilePathUtil
 
 ---------------------------------------------------------------------
 -- Type Definitions:
