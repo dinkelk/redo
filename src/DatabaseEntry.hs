@@ -39,7 +39,7 @@ writeEntry entry contents = do
 
 -- Write a new value to the entry:
 appendEntry :: Entry -> String -> IO ()
-appendEntry entry contents = do 
+appendEntry entry contents =
   safeCreateDirectoryRecursive dir 
   where entry' = entryToFilePath entry
         dir = entry' </> contents

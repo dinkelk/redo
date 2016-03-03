@@ -94,7 +94,7 @@ upToDate''' level target key = do
     debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: DoFile -> IO Bool
-    newDoFile doFile = do
+    newDoFile doFile =
       -- We shouldn't expect a do file to build another do file by default, so skip this check
       -- otherwise we end up with uncorrect behavior
       if takeExtension (unTarget target) == ".do" then return False
@@ -112,15 +112,15 @@ depsUpToDate level target doFileDir key = do
   else do 
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     ifCreateDeps <- getIfCreateDeps key
-    depCreated' <- mapOr (doesTargetExist . makeAbsolute) ifCreateDeps
+    depCreated' <- mapOr (doesTargetExist . canonicalize) ifCreateDeps
     if depCreated' then return False `debug'` "-dep created"
     else do
       -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
       --                 then recursively check their dependencies to see if they are up to date
       ifChangeDeps <- getIfChangeDeps key
-      mapAnd ((upToDate' (level+1)) . makeAbsolute) ifChangeDeps 
+      mapAnd (upToDate' (level+1) . canonicalize) ifChangeDeps 
   where 
-    makeAbsolute dep = Target $ removeDotDirs $ doFileDir </> (unTarget dep)
+    canonicalize dep = Target $ removeDotDirs $ doFileDir </> unTarget dep
     debug' = debugUpToDate level target
 
 -- Helper for debugging:

@@ -1,10 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database (getDatabase, clearCache, clearLockFiles, redoMetaDirectory, initializeTargetDatabase, 
-                 hasAlwaysDep, getIfCreateDeps, getIfChangeDeps, storePhonyTarget, createLockFile, 
-                 markClean, storeIfCreateDep, markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, 
-                 storeAlwaysDep, getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, 
-                 getDoFile, getStamp, isSource, getKey, isTargetSource, LockFile(..), Key(..)) where
+module Database (clearCache, clearLockFiles, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
+                 getIfChangeDeps, storePhonyTarget, createLockFile, markClean, storeIfCreateDep, 
+                 markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
+                 getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
+                 isSource, getKey, LockFile(..), Key(..)) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -77,24 +77,33 @@ clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
 ---------------------------------------------------------------------
 -- Get the database for a given target:
 getKey :: Target -> IO Key
-getKey target = do
-  hashedTarget <- hashString target
-  return $ Key $ pathify hashedTarget
+getKey target =
+  return $ Key $ pathify $ hashString target
   where 
     pathify "" = ""
     pathify string = x </> pathify xs
       where (x,xs) = splitAt 2 string
 
 -- Create a hash string for a target:
--- TODO remove canonicalize Path here
-hashString :: Target -> IO FilePath
-hashString target = do 
-  absPath <- canonicalizePath' $ unTarget target
-  return $ hex $ BS.unpack $ hash $ BS.pack absPath
+-- Note: For best results make sure you pass a canonicalized target
+hashString :: Target -> FilePath
+hashString target = hex $ BS.unpack $ hash $ BS.pack $ unTarget target
 
 ---------------------------------------------------------------------
--- Functions getting database entries:
+-- Functions for setting up a database for a target:
 ---------------------------------------------------------------------
+-- Get the lock file directory for a target:
+getLockFileDatabase :: Key -> IO FilePath 
+getLockFileDatabase key = do
+  lockFileDir <- redoLockFileDirectory
+  return $ lockFileDir </> keyToFilePath key
+
+-- Get the database directory for a target's stamp:
+getStampDatabase :: Key -> IO FilePath
+getStampDatabase key = do
+  stampDir <- redoStampDirectory 
+  return $ stampDir </> keyToFilePath key 
+
 -- Get the database directory for a target:
 getDatabase :: Key -> IO FilePath
 getDatabase key = do
@@ -144,6 +153,21 @@ initializeSourceDatabase key target = do
 doesDatabaseExist :: Key -> IO Bool
 doesDatabaseExist key = doesDirectoryExist =<< getDatabase key
 
+-- Return the lock file name for a target:
+createLockFile :: Target -> IO LockFile
+createLockFile target = do
+  key <- getKey target
+  createLockFile' key
+
+createLockFile' :: Key -> IO LockFile
+createLockFile' key = do 
+  lockFileDir <- getLockFileDatabase key
+  safeCreateDirectoryRecursive lockFileDir 
+  return $ LockFile $ lockFileDir </> "l"
+
+---------------------------------------------------------------------
+-- Functions getting database entries:
+---------------------------------------------------------------------
 -- Generic function for getting a database entry with a certain name:
 getDatabaseEntry :: FilePath -> Key -> IO Entry
 getDatabaseEntry name key = do
@@ -178,12 +202,6 @@ getDoFileEntry = getDatabaseEntry "d"
 getTargetEntry :: Key -> IO Entry
 getTargetEntry = getDatabaseEntry "t"
 
--- Get the database directory for a target's stamp:
-getStampDatabase :: Key -> IO FilePath
-getStampDatabase key = do
-  stampDir <- redoStampDirectory 
-  return $ stampDir </> keyToFilePath key 
-
 -- Get the database entry for a target's stamp
 getStampEntry :: Key -> IO Entry
 getStampEntry key = do
@@ -211,21 +229,65 @@ getDirtyEntry :: Key -> IO Entry
 getDirtyEntry = getCacheEntry "d"
 
 ---------------------------------------------------------------------
--- Functions getting lock files:
+-- Functions getting database values:
 ---------------------------------------------------------------------
--- Get the lock file directory for a target:
-getLockFileDatabase :: Key -> IO FilePath 
-getLockFileDatabase key = do
-  lockFileDir <- redoLockFileDirectory
-  return $ lockFileDir </> keyToFilePath key
+-- Get the cached timestamp for when a target was last built. Return '.'
+getStamp :: Key -> IO (Maybe Stamp)
+getStamp key = catch (
+  do stampDir <- getStampEntry key
+     contents <- readEntry1 stampDir
+     return $ Just $ Stamp contents)
+  (\(_ :: SomeException) -> return Nothing)
 
+getIfCreateDeps :: Key -> IO [Target]
+getIfCreateDeps key = do
+  ifCreateEntry <- getIfCreateEntry key
+  getIfCreateDeps' ifCreateEntry
+  where 
+    getIfCreateDeps' entry = 
+      catch (do files <- readEntry entry
+                return $ map (Target . unescapeFilePath) files)
+            (\(_ :: SomeException) -> return [])
+
+getIfChangeDeps :: Key -> IO [Target]
+getIfChangeDeps key = do
+  ifChangeDir <- getIfChangeEntry key
+  getIfChangeDeps' ifChangeDir
+  where 
+    getIfChangeDeps' dir = 
+      catch (do files <- readEntry dir
+                return $ map (Target . unescapeFilePath) files)
+            (\(_ :: SomeException) -> return [])
+
+isClean :: Key -> IO Bool 
+isClean key = doesEntryExist =<< getCleanEntry key
+
+isDirty :: Key -> IO Bool 
+isDirty key = doesEntryExist =<< getDirtyEntry key
+
+-- Retrieve the cached do file path inside meta dir
+getDoFile :: Key -> IO (Maybe DoFile)
+getDoFile key = do
+  doFileDir <- getDoFileEntry key
+  catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
+  where readDoFile dir = do doFile <- readEntry1 dir
+                            return $ Just $ DoFile $ unescapeFilePath doFile
+
+-- Returns the path to the target, if it exists, otherwise it returns the path to the
+-- phony target if it exists, else return Nothing
+getBuiltTargetPath :: Key -> Target -> IO(Maybe Target)
+getBuiltTargetPath key target = do
+  phonyEntry <- getPhonyTargetEntry key
+  returnTargetIfExists (returnPhonyIfExists (return Nothing) phonyEntry) target
+  where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
+        returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
 ---------------------------------------------------------------------
--- Functions writing meta files:
+
+-- Functions writing database entries:
 ---------------------------------------------------------------------
 storeIfChangeDep :: Key -> Target -> IO () 
 storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
-  -- TODO... maybe just store the key instead?
   appendEntry ifChangeEntry (escapeFilePath $ unTarget dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
@@ -250,30 +312,10 @@ markSource key = createEntry =<< getSourceEntry key
 isSource :: Key -> IO Bool
 isSource key = doesEntryExist =<< getSourceEntry key
 
-getIfCreateDeps :: Key -> IO [Target]
-getIfCreateDeps key = do
-  ifCreateEntry <- getIfCreateEntry key
-  getIfCreateDeps' ifCreateEntry
-  where 
-    getIfCreateDeps' entry = 
-      catch (do files <- readEntry entry
-                return $ map (Target. (unescapeFilePath)) files)
-            (\(_ :: SomeException) -> return [])
-
-getIfChangeDeps :: Key -> IO [Target]
-getIfChangeDeps key = do
-  ifChangeDir <- getIfChangeEntry key
-  getIfChangeDeps' ifChangeDir
-  where 
-    getIfChangeDeps' dir = 
-      catch (do files <- readEntry dir
-                return $ map (Target . (unescapeFilePath)) files)
-            (\(_ :: SomeException) -> return [])
-
 storePhonyTarget :: Key -> IO () 
 storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
-  writeEntry phonyTargetDir (escapeFilePath $ ".")
+  writeEntry phonyTargetDir (escapeFilePath ".")
 
 markClean :: Key -> IO ()
 markClean key = createEntry =<< getCleanEntry key
@@ -295,60 +337,3 @@ storeStamp :: Key -> Stamp -> IO ()
 storeStamp key stamp = do
   stampDir <- getStampEntry key
   writeEntry stampDir (unStamp stamp)
-
--- Get the cached timestamp for when a target was last built. Return '.'
-getStamp :: Key -> IO (Maybe Stamp)
-getStamp key = catch (
-  do stampDir <- getStampEntry key
-     contents <- readEntry1 stampDir
-     return $ Just $ Stamp $ contents)
-  (\(_ :: SomeException) -> return Nothing)
-
--- Return the lock file name for a target:
--- TODO make this take a key
-createLockFile :: Target -> IO LockFile
-createLockFile target = do
-  key <- getKey target
-  createLockFile' key
-
-createLockFile' :: Key -> IO LockFile
-createLockFile' key = do 
-  lockFileDir <- getLockFileDatabase key
-  -- TODO cleanup:
-  safeCreateDirectoryRecursive lockFileDir 
-  return $ LockFile $ lockFileDir </> "l"
-
----------------------------------------------------------------------
--- Functions reading meta files:
----------------------------------------------------------------------
-isClean :: Key -> IO Bool 
-isClean key = doesEntryExist =<< getCleanEntry key
-
-isDirty :: Key -> IO Bool 
-isDirty key = doesEntryExist =<< getDirtyEntry key
-
--- Retrieve the cached do file path inside meta dir
-getDoFile :: Key -> IO (Maybe DoFile)
-getDoFile key = do
-  doFileDir <- getDoFileEntry key
-  catch(readDoFile doFileDir) (\(_ :: SomeException) -> return Nothing)
-  where readDoFile dir = do doFile <- readEntry1 dir
-                            return $ Just $ (DoFile $ unescapeFilePath doFile)
-
--- Returns the path to the target, if it exists, otherwise it returns the path to the
--- phony target if it exists, else return Nothing
-getBuiltTargetPath :: Key -> Target -> IO(Maybe Target)
-getBuiltTargetPath key target = do
-  phonyEntry <- getPhonyTargetEntry key
-  returnTargetIfExists (returnPhonyIfExists (return Nothing) (phonyEntry)) target
-  where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
-        returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
-
--- Does the target file or directory exist on the filesystem?
--- Checks if a target file is a buildable target, or if it is a source file
-isTargetSource :: Target -> IO Bool
-isTargetSource target = bool (return False) (isTargetSource') =<< doesTargetExist target
-  where isTargetSource' = do key <- getKey target
-                             hasDB <- doesDatabaseExist key
-                             markedSource <- isSource key
-                             return $ not hasDB || markedSource

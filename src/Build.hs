@@ -38,18 +38,15 @@ storeIfCreateDependencies = storeDependencies storeIfCreateDep
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
 storeAlwaysDependency = do 
-  parentRedoTarget <- getEnv "REDO_TARGET"
-  -- TODO: consider storing the key in the variable...
-  key <- getKey $ Target parentRedoTarget
+  key <- Key <$> getEnv "REDO_KEY"
   storeAlwaysDep key
 
 -- Store dependencies given a store action and a list of dependencies to store:
 storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
 storeDependencies storeAction dependencies = do 
-  parentRedoTarget <- getEnv "REDO_TARGET"
+  key <- Key <$> getEnv "REDO_KEY"
   parentRedoPath <- getEnv "REDO_PATH" -- directory where .do file was run from
   dependenciesRel2Parent <- makeRelativeToParent parentRedoPath dependencies 
-  key <- getKey $ Target parentRedoTarget
   mapM_ (storeAction key) dependenciesRel2Parent
   where
     makeRelativeToParent :: FilePath -> [Target] -> IO [Target]
@@ -68,49 +65,80 @@ isRunFromDoFile = do
   redoTarget <- lookupEnv "REDO_TARGET"  
   if isNothing redoTarget || null (fromJust redoTarget) then return False else return True
 
+-- Does the target file or directory exist on the filesystem?
+-- Checks if a target file is a buildable target, or if it is a source file
+isTargetSource :: Key -> Target -> IO Bool
+isTargetSource key target = bool (return False) isTargetSource' =<< doesTargetExist target
+  where isTargetSource' = do hasDB <- doesDatabaseExist key
+                             markedSource <- isSource key
+                             return $ not hasDB || markedSource
+
+-- Run do file if the target was not modified by the user first.
+isTargetModified :: Key -> Maybe Stamp -> IO Bool
+isTargetModified key currentStamp = do 
+  cachedStamp <- getStamp key
+  return $ isJust currentStamp && cachedStamp /= currentStamp
+
 -- Print warning for trying to build a source file:
-buildSourceWarning :: Target -> IO ExitCode
-buildSourceWarning target = do
+targetSourceWarning :: Target -> IO ExitCode
+targetSourceWarning target = do
   putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' exists and is marked as a source file. Not redoing."
   putWarningStrLn $ "If you believe '" ++ unTarget target ++ "' is buildable, remove it and try again."
   return $ ExitFailure 1
+
+-- Print warning telling user that they modified a target outside of redo:
+targetModifiedWarning :: Target -> IO ExitCode
+targetModifiedWarning target = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping..."
+                                  putWarningStrLn $ "If you want to rebuild '" ++ unTarget target ++ "', remove it and try again."
+                                  return ExitSuccess
+
+-- Missing do error function:
+noDoFileError :: Target -> IO ExitCode
+noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build target '" ++ unTarget target ++ "'"
+                          return $ ExitFailure 1
 
 -- Just run the do file for a 'redo' command:
 redo :: [Target] -> IO ExitCode
 redo = buildTargets redo'
   where redo' target = do 
           key <- getKey target
-          source <- isTargetSource target
-          if source then buildSourceWarning target
-          else maybe (noDoFileError target) (build key target) =<< findDoFile target
+          source <- isTargetSource key target
+          currentStamp <- safeStampTarget target
+          modified <- isTargetModified key currentStamp
+          if source then targetSourceWarning target
+          else if modified then targetModifiedWarning target
+          else maybe (noDoFileError target) (build key target currentStamp) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [Target] -> IO ExitCode
 redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
-      source <- isTargetSource target
-      runFromDo <- isRunFromDoFile
       key <- getKey target
+      source <- isTargetSource key target
+      runFromDo <- isRunFromDoFile
       case (source, runFromDo) of
-        (True, False) -> buildSourceWarning target
+        (True, False) -> targetSourceWarning target
         (True, True) -> do initializeSourceDatabase key target
                            return ExitSuccess
         (False, _) -> do
-          --putStatusStrLn $ "redo-ifchange " ++ target
-          upToDate' <- upToDate key target
-          -- Try to run redo if out of date, if it fails, print an error message:
-          unless' upToDate' (maybe (missingDo target) (build key target) =<< findDoFile target)
+          currentStamp <- safeStampTarget target
+          modified <- isTargetModified key currentStamp
+          if modified then targetModifiedWarning target
+          else do
+            --putStatusStrLn $ "redo-ifchange " ++ target
+            upToDate' <- upToDate key target
+            -- Try to run redo if out of date, if it fails, print an error message:
+            unless' upToDate' (maybe (missingDo key target) (build key target currentStamp) =<< findDoFile target)
     -- Custom unless which return ExitSuccess if the condition is met
     unless' condition action = if condition then return ExitSuccess else action
     -- If a do file is not found then return an error message, unless the file exists,
     -- in which case it is a source file and does not need to be rebuilt
-    missingDo target = do exists <- doesTargetExist target
-                          if exists then do
-                            key <- getKey target 
-                            initializeSourceDatabase key target
-                            return ExitSuccess
-                          else noDoFileError target
+    missingDo key target = do exists <- doesTargetExist target
+                              if exists then do
+                                initializeSourceDatabase key target
+                                return ExitSuccess
+                              else noDoFileError target
 
 -- Lock a file and run a function that takes that file as input.
 -- If the file is already locked, skip running the function on that
@@ -176,8 +204,10 @@ buildTargets buildFunc targets = do
           else mapM_'' exitCode xs
 
 -- Run a do file in the do file directory on the given target:
-build :: Key -> Target -> DoFile -> IO ExitCode
-build key target doFile = performActionInDir (takeDirectory $ unDoFile doFile) (runDoFile key target) doFile
+build :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
+build key target currentTimeStamp doFile = performActionInDir 
+                                           (takeDirectory $ unDoFile doFile) 
+                                           (runDoFile key target currentTimeStamp) doFile
 
 -- Run an action on a parameter and return an exit code within a certain directory
 performActionInDir :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
@@ -190,25 +220,10 @@ performActionInDir dir action arg = do
   setCurrentDirectory topDir
   return exitCode
 
--- Run do file if the target was not modified by the user first.
--- TODO, move this logic earlier in the process?
-runDoFile :: Key -> Target -> DoFile -> IO ExitCode
-runDoFile key target doFile = do 
-  cachedStamp <- getStamp key
-  currentStamp <- safeStampTarget target
-  targetIsDirectory <- doesDirectoryExist $ unTarget target
-  if isJust currentStamp && cachedStamp /= currentStamp then targetModifiedError 
-  else runDoFile' key target doFile currentStamp targetIsDirectory
-  where
-    targetModifiedError :: IO ExitCode
-    targetModifiedError = do putWarningStrLn $ "Warning: '" ++ unTarget target ++ "' was modified outside of redo. Skipping...\n" ++
-                                               "If you want to rebuild '" ++ unTarget target ++ "', remove it and try again."
-                             return ExitSuccess
-
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile' :: Key -> Target -> DoFile -> Maybe Stamp -> Bool -> IO ExitCode
-runDoFile' key target doFile currentTimeStamp targetIsDirectory = do 
+runDoFile :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
+runDoFile key target currentTimeStamp doFile = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -225,6 +240,7 @@ runDoFile' key target doFile currentTimeStamp targetIsDirectory = do
   let sessionNumber = fromMaybe "" sessionNumber'
   let targetRel2Do = Target $ makeRelative' redoPath (unTarget target)
   cmd <- shellCmd shellArgs doFile targetRel2Do
+  targetIsDirectory <- doesDirectoryExist $ unTarget target
 
   -- Print what we are currently "redoing"
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
@@ -247,14 +263,15 @@ runDoFile' key target doFile currentTimeStamp targetIsDirectory = do
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_TARGET" (unTarget target)
+                      $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> do exitCode <- moveTempFiles 
+    ExitSuccess -> do exitCode <- moveTempFiles targetIsDirectory 
                       -- If the target exists, then store the target stamp
-                      maybe (nonZeroExitStr exitCode) (stampBuiltTarget) 
+                      maybe (nonZeroExitStr exitCode) stampBuiltTarget
                         =<< getBuiltTargetPath key target
                       bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
     ExitFailure code -> do markDirty key -- we failed to build this target, so mark it dirty
@@ -276,8 +293,8 @@ runDoFile' key target doFile currentTimeStamp targetIsDirectory = do
     -- Temporary file names:
     tmp3 = tmp3File target 
     tmpStdout = tmpStdoutFile target 
-    moveTempFiles :: IO Int
-    moveTempFiles = do 
+    moveTempFiles :: Bool -> IO Int
+    moveTempFiles targetIsDirectory = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- fileSize tmpStdout
@@ -382,8 +399,3 @@ safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> remo
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer
 fileSize path = withFile path ReadMode hFileSize
-
--- Missing do error function:
-noDoFileError :: Target -> IO ExitCode
-noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build target '" ++ unTarget target ++ "'"
-                          return $ ExitFailure 1

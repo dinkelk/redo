@@ -1,5 +1,3 @@
--- adding StandAloneDeriving extension:
--- {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- System imports:
@@ -7,7 +5,7 @@ import Control.Monad (unless, when)
 import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 import System.Console.GetOpt
-import System.Directory (getCurrentDirectory, createDirectoryIfMissing)
+import System.Directory (getCurrentDirectory)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
@@ -59,30 +57,30 @@ getOptions argv =
 -- Main function:
 main :: IO ()
 main = do 
-
+  
+  -- Get program name and arguments:
   args <- getArgs
   progName <- getProgName
 
   -- Parse options, getting a list of option actions:
   opts <- getOptions args
   let (flags, targets) = opts 
+
   -- Show help or version information if asked:
   when (Version `elem` flags) printVersion
   when (Help `elem` flags) (printHelp progName options [])
   when (KeepGoing `elem` flags) (setEnv "REDO_KEEP_GOING" "TRUE")
   when (Shuffle `elem` flags) (setEnv "REDO_SHUFFLE" "TRUE")
+
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
   let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
                                   if DashV `elem` flags then "v" else ""]
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
+
   -- Set the redo path variable to the current directory for the first call:
   redoInitPath <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
-
-  -- Create a the meta directory if it doesn't exist yet:
-  metaRootDir <- redoMetaDirectory
-  createDirectoryIfMissing True metaRootDir
 
   -- Run the main:
   mainToRun' <- mainToRun
@@ -100,10 +98,8 @@ main = do
                    return $ if runFromDoFile then mainDo else mainTop
 
 -- The main function for redo run at a top level (outside of a .do file)
--- TODO combine the two top functions
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
-
   -- Remove old lock files and other cached files:
   clearLockFiles
   clearCache
@@ -132,7 +128,7 @@ mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> do exitWith =<< redo targets
+    "redo" -> exitWith =<< redo targets
     -- Run redo-ifchange only on buildable files from the target's directory
     -- Next store hash information for the parent target from the parent target's directory (current directory)
     "redo-ifchange" -> do exitCode <- redoIfChange targets
