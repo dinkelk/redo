@@ -4,13 +4,11 @@
 module UpToDate (upToDate) where
 
 import Data.Maybe (isNothing, fromJust)
-import System.FilePath (takeDirectory, takeExtension, (</>))
+import System.FilePath (takeDirectory, takeExtension)
 import Debug.Trace (trace)
 
-import FilePathUtil
 import Types
 import Database 
-import PrettyPrint
 
 -- Debug helpers:
 debug :: c -> String -> c
@@ -110,17 +108,14 @@ depsUpToDate level target doFileDir key = do
   else do 
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     ifCreateDeps <- getIfCreateDeps key
-    depCreated' <- mapOr (doesTargetExist . canonicalize . snd) ifCreateDeps
+    depCreated' <- mapOr (doesTargetExist) ifCreateDeps
     if depCreated' then return False `debug'` "-dep created"
     else do
       -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
       --                 then recursively check their dependencies to see if they are up to date
       ifChangeDeps <- getIfChangeDeps key
-      -- TODO pass key to since we have it
-      mapAnd (upToDate' (level+1) . canonicalize . snd) ifChangeDeps 
+      mapAnd (upToDate' (level+1)) ifChangeDeps 
   where 
-    --canonicalize dep = Target $ removeDotDirs $ doFileDir </> unTarget dep
-    canonicalize dep = dep
     debug' = debugUpToDate level target
 
 -- Helper for debugging:

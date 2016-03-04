@@ -241,27 +241,27 @@ getStamp key = catch (
      return $ Just $ Stamp contents)
   (\(_ :: SomeException) -> return Nothing)
 
-getIfCreateDeps :: Key -> IO [(Key, Target)]
+getIfCreateDeps :: Key -> IO [Target]
 getIfCreateDeps key = do
   ifCreateEntry <- getIfCreateEntry key
   getIfCreateDeps' ifCreateEntry
   where getIfCreateDeps' entry = 
           catch (do 
-            strings <- readFileEntry entry
-            return $ map convert strings)
+            targets <- readEntry entry
+            return $ map convert targets)
           (\(_ :: SomeException) -> return [])
-        convert (a1, a2) = (Key a1, Target a2)
+        convert = Target . unescapeFilePath
 
-getIfChangeDeps :: Key -> IO [(Key, Target)]
+getIfChangeDeps :: Key -> IO [Target]
 getIfChangeDeps key = do
   ifChangeDir <- getIfChangeEntry key
   getIfChangeDeps' ifChangeDir
   where getIfChangeDeps' entry =
           catch (do 
-            strings <- readFileEntry entry
-            return $ map convert strings)
+            targets <- readEntry entry
+            return $ map convert targets)
           (\(_ :: SomeException) -> return [])
-        convert (a1, a2) = (Key a1, Target a2)
+        convert = Target . unescapeFilePath
 
 isClean :: Key -> IO Bool 
 isClean key = doesEntryExist =<< getCleanEntry key
@@ -299,8 +299,7 @@ getTarget key = do
 storeIfChangeDep :: Key -> Target -> IO () 
 storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
-  depKey <- getKey dep
-  appendFileEntry ifChangeEntry (keyToFilePath depKey) (unTarget dep) -- TODO (escapeFilePath $ unTarget dep)
+  appendEntry ifChangeEntry (escapeFilePath $ unTarget dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
@@ -309,9 +308,8 @@ storeIfCreateDep key dep = bool (storeIfCreateDep' key dep)
 
 storeIfCreateDep' :: Key -> Target -> IO () 
 storeIfCreateDep' key dep = do
-  ifCreateDir <- getIfCreateEntry key
-  depKey <- getKey dep
-  appendFileEntry ifCreateDir (keyToFilePath depKey) (unTarget dep) -- (escapeFilePath $ unTarget target)
+  ifCreateEntry <- getIfCreateEntry key
+  appendEntry ifCreateEntry (escapeFilePath $ unTarget dep)
 
 storeAlwaysDep :: Key -> IO () 
 storeAlwaysDep key = createEntry =<< getAlwaysEntry key

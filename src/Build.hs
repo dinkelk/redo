@@ -16,7 +16,7 @@ import System.Directory (removeDirectoryRecursive, doesDirectoryExist, setCurren
 import System.Environment (getEnvironment, lookupEnv, getEnv)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
-import System.FilePath ((</>), takeDirectory, dropExtension, makeRelative, takeExtensions, takeFileName, dropExtensions)
+import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 
