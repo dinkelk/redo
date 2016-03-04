@@ -1,14 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry,
-                     appendFileEntry, readFileEntry) where
+module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
 
 import System.Directory (getDirectoryContents, doesDirectoryExist)
 import System.FilePath ((</>))
 
 import FilePathUtil
-import PrettyPrint
 
 ---------------------------------------------------------------------
 -- Type Definitions:
@@ -59,37 +57,3 @@ readEntry entry = do
   contents <- getDirectoryContents entry'
   return $ drop 2 contents
   where entry' = entryToFilePath entry
-
--- appendFileEntry :: Entry -> String -> String -> IO ()
--- appendFileEntry entry name contents = do
---   safeCreateDirectoryRecursive entry'
---   writeFile dir contents
---   where entry' = entryToFilePath entry
---         dir = entry' </> name
--- 
--- -- Read all of the values from an entry
--- readFileEntry :: Entry -> IO [(String, String)]
--- readFileEntry entry = do
---   names' <- getDirectoryContents entry'
---   let names = drop 2 names'
---   mapM extract names
---   where entry' = entryToFilePath entry
---         extract file = do contents <- readFile $ entry' </> file
---                           return $ (file, contents)
-
-
-appendFileEntry :: Entry -> String -> String -> IO ()
-appendFileEntry entry name contents = do
-  safeCreateDirectoryRecursive dir
-  where entry' = entryToFilePath entry
-        dir = entry' </> name </> escapeFilePath contents
-
--- Read all of the values from an entry
-readFileEntry :: Entry -> IO [(String, String)]
-readFileEntry entry = do
-  names' <- getDirectoryContents entry'
-  let names = drop 2 names'
-  mapM extract names
-  where entry' = entryToFilePath entry
-        extract file = do contents <- getDirectoryContents $ entry' </> file
-                          return $ (file, unescapeFilePath (contents !! 2))

@@ -4,8 +4,8 @@
 module UpToDate (upToDate) where
 
 import Data.Maybe (isNothing, fromJust)
-import System.FilePath (takeDirectory, takeExtension)
-import Debug.Trace (trace)
+import System.FilePath (takeExtension)
+--import Debug.Trace (trace)
 
 import Types
 import Database 
@@ -13,7 +13,7 @@ import Database
 -- Debug helpers:
 debug :: c -> String -> c
 --debug = flip trace
-debug a b = a
+debug a _ = a
 
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
@@ -81,11 +81,7 @@ upToDate''' level target key = do
       -- If the target exists but a new do file was found for it then we need to rebuilt it, so
       -- it is not up to date.
       if newDo then return False `debug'` "-new do"
-      else do
-        let doFileDir = takeDirectory $ unDoFile absDoFile
-        -- If all of the dependencies are up to date then this target is also up to date, so mark it
-        -- as such and return true. Else, return false.
-        depsUpToDate (level+1) target doFileDir key
+      else depsUpToDate (level+1) target key
   where 
     debug' = debugUpToDate level target
     -- Does the target have a new do file from the last time it was built?
@@ -100,8 +96,8 @@ upToDate''' level target key = do
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
-depsUpToDate :: Int -> Target -> FilePath -> Key -> IO Bool
-depsUpToDate level target doFileDir key = do
+depsUpToDate :: Int -> Target -> Key -> IO Bool
+depsUpToDate level target key = do
   -- redo-always - if an always dependency exists, we need to return False immediately
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"

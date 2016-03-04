@@ -11,7 +11,7 @@ import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash.MD5 (hash) 
 import Data.Hex (hex)
 import Data.Bool (bool)
-import System.Directory (getAppUserDataDirectory, doesDirectoryExist)
+import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
 
@@ -33,6 +33,11 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Show, E
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
+-- Directory for storing temporary data:
+redoTempDirectory :: IO FilePath
+redoTempDirectory = do base <- getTemporaryDirectory
+                       return $ base </> "redo"
+
 -- Directory for storing dependency database entries for redo targets and sources
 redoDatabaseDirectory :: IO FilePath
 redoDatabaseDirectory = do
@@ -52,13 +57,13 @@ redoStampDirectory = do
 -- the upToDate function
 redoCacheDirectory :: IO FilePath
 redoCacheDirectory = do
-  root <- redoMetaDirectory
+  root <- redoTempDirectory 
   return $ root </> "cache"
 
 -- Directory for storing file locks to syncronize parallel builds
 redoLockFileDirectory :: IO FilePath
 redoLockFileDirectory = do
-  root <- redoMetaDirectory
+  root <- redoTempDirectory 
   return $ root </> "locks"
 
 ---------------------------------------------------------------------
@@ -78,13 +83,11 @@ clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
 -- Get the database for a given target:
 getKey :: Target -> IO Key
 getKey target =
-  -- TODO, this is now broken since I am storing keys as dirs
-  --return $ Key $ pathify $ hashString target
-  return $ Key $ hashString target
+  return $ Key $ pathify 3 $ hashString target
   where 
-    pathify "" = ""
-    pathify string = x </> pathify xs
-      where (x,xs) = splitAt 2 string
+    pathify _ "" = ""
+    pathify n string = x </> pathify (n+n) xs
+      where (x,xs) = splitAt n string
 
 -- Create a hash string for a target:
 -- Note: For best results make sure you pass a canonicalized target
@@ -130,13 +133,11 @@ refreshDatabase key = do
 -- We store a dependency for the target on the do file
 -- Note: this function also blows out the old directory, which is good news because we don't want old
 -- dependencies hanging around if we are rebuilding a file.
-initializeTargetDatabase :: Key -> Target -> DoFile -> IO ()
-initializeTargetDatabase key target doFile = do
+initializeTargetDatabase :: Key -> DoFile -> IO ()
+initializeTargetDatabase key doFile = do
   refreshDatabase key
   -- Write out .do script as dependency:
   storeIfChangeDep key (Target $ unDoFile doFile)
-  -- Write out target name:
-  storeTarget key target
   -- Cache the do file:
   storeDoFile key doFile
 
@@ -146,8 +147,6 @@ initializeSourceDatabase key target = do
   -- Write out the source file stamp:
   stamp <- stampTarget target
   storeStamp key stamp
-  -- Write out the source file name:
-  storeTarget key target
   -- Mark this target as source:
   markSource key
 
@@ -199,10 +198,6 @@ getPhonyTargetEntry = getDatabaseEntry "p"
 -- Get the database entry for a target's do file name:
 getDoFileEntry :: Key -> IO Entry
 getDoFileEntry = getDatabaseEntry "d"
-
--- Get the database entry for a target's file name:
-getTargetEntry :: Key -> IO Entry
-getTargetEntry = getDatabaseEntry "t"
 
 -- Get the database entry for a target's stamp
 getStampEntry :: Key -> IO Entry
@@ -286,12 +281,6 @@ getBuiltTargetPath key target = do
   where returnTargetIfExists failFunc file = bool failFunc (return $ Just file) =<< doesTargetExist file
         returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
 
-getTarget :: Key -> IO Target
-getTarget key = do
-  targetEntry <- getTargetEntry key
-  readEntry targetEntry
-  where readEntry dir = do target <- readEntry1 dir
-                           return $ Target $ unescapeFilePath target
 ---------------------------------------------------------------------
 
 -- Functions writing database entries:
@@ -338,11 +327,6 @@ storeDoFile :: Key -> DoFile -> IO ()
 storeDoFile key doFile = do
   doFileDir <- getDoFileEntry key
   writeEntry doFileDir (escapeFilePath $ unDoFile doFile)
-
-storeTarget :: Key -> Target -> IO ()
-storeTarget key target = do
-  targetEntry <- getTargetEntry key
-  writeEntry targetEntry (escapeFilePath $ unTarget target)
 
 storeStamp :: Key -> Stamp -> IO ()
 storeStamp key stamp = do

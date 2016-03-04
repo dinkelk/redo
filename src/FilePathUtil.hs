@@ -7,7 +7,7 @@ module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursi
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..), catchJust)
 import Control.Monad (guard)
-import System.FilePath (joinPath, splitDirectories, normalise, dropTrailingPathSeparator, (</>), isPathSeparator, pathSeparator, splitFileName)
+import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, pathSeparator)
 import System.FilePath.Glob (globDir1, compile)
 import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
 import System.IO.Error (isDoesNotExistError)
@@ -22,25 +22,16 @@ import System.IO.Error (isDoesNotExistError)
 ---------------------------------------------------------------------
 -- Functions escaping and unescaping path names
 ---------------------------------------------------------------------
--- This is the same as running normalise, but it always removes the trailing path
--- separator, and it always keeps a "./" in front of things in the current directory
--- and always removes "./" in front of things not in the current directory.
--- we use this to ensure consistancy of naming convention
-sanitizeFilePath :: FilePath -> FilePath
-sanitizeFilePath filePath = normalise $ dir </> file
-  where (dir, file) = splitFileName . dropTrailingPathSeparator . normalise $ filePath
-
 -- Takes a file path and replaces all </> with @
 escapeFilePath :: FilePath -> FilePath
 escapeFilePath path = concatMap repl path'
-  where --path' = sanitizeFilePath path
-        path' = path
+  where path' = path
         repl seperator_replacement = seperator_replacement : [seperator_replacement_escape]
         repl c   = if isPathSeparator c then [seperator_replacement] else [c]
 
 -- Reverses escapeFilePath
 unescapeFilePath :: FilePath -> FilePath
-unescapeFilePath name = unEscape name -- sanitizeFilePath $ unEscape name
+unescapeFilePath name = unEscape name
   where 
     unEscape [] = []
     unEscape string = first : unEscape rest

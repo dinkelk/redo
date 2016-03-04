@@ -240,7 +240,7 @@ runDoFile key target currentTimeStamp doFile = do
   unless(null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the target database:
-  initializeTargetDatabase key target doFile
+  initializeTargetDatabase key doFile
 
   -- Create the dofile database:
   doFileKey <- getKey $ Target $ unDoFile doFile
