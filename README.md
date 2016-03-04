@@ -1,6 +1,10 @@
 # redo
 
-An implementation of djb's [redo](http://cr.yp.to/redo.html) in [Haskell](https://www.haskell.org/). What is redo? Redo provides you a way to rebuild source files when they have changed.
+`redo` is like `make`, but better.
+
+Like `make`, `redo` allows you to rebuild source files when they have changed.
+
+While I wrote this implementation of `redo`, credit for the original design goes to D. J. Bernstein, who published as a set of notes on the program on his [website]( http://cr.yp.to/redo.html). Since djb has never released his version of `redo`, a few people have created and published their own implementations. Before writing this implementation, I used [apenwarr's python implementation](https://github.com/apenwarr/redo) on a daily basis in my projects. Later, I found [jekor's video series] (http://www.youtube.com/playlist?list=PLxj9UAX4Em-Ij4TKwKvo-SLp-Zbv-hB4B) on implementing redo from scratch in [Haskell](https://www.haskell.org/). I was intrigued at the prospect of implementing an elegant program in an elegant language, and so I began implementing my own version of `redo` in Haskell. The end result is this version of `redo`, which looks and feels very similiar to apenwarr's implementation, but is faster.
 
 ## Installation
 
@@ -21,7 +25,6 @@ This implementation has been tested on MacOSX but should work on any Unix-like p
 
 ## Performance
 
-TODO
 
 ## Credits
 
