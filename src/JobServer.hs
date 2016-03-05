@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables, FlexibleInstances #-}
 
 module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, runJob, waitOnJobs,
-                  printJobServerHandle, JobServerHandle, tryWaitOnJobs) where
+                  JobServerHandle, tryWaitOnJobs) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, tryTakeMVar, MVar, threadDelay, forkOS)
 import Control.Exception.Base (assert)
@@ -103,11 +103,6 @@ runJob handle j = maybe runJob' forkJob =<< getToken r
                  mReturn <- newEmptyMVar
                  putMVar mReturn ret
                  return $ JobServerHandle (r, w, mReturns++[mReturn])
-      
-printJobServerHandle :: JobServerHandle a -> IO ()
-printJobServerHandle handle = hPutStrLn stderr $ "handle: (" ++ show r ++ ", " ++ show w ++ ", len " ++ show (length mvars) ++ ")"
-  where (r, w, mvars) = unJobServerHandle handle
-
 
 runForkedJob :: MVar (Token) -> MVar (a) -> Fd -> IO a -> IO ()
 runForkedJob mToken mReturn w job = do 
@@ -163,14 +158,11 @@ splitBy delimiter = foldr f [[]]
 -- Main function:
 main :: IO ()
 main = do handle <- initializeJobServer 4
-          printJobServerHandle handle
           returns <- runJobs handle jobs
           hPutStrLn stderr $ "returns: " ++ show returns
           hPutStrLn stderr "--------------------------------------------------------------------"
           handle2 <- getJobServer
-          printJobServerHandle handle2
           handle3 <- mapM' runJob handle2 jobs
-          printJobServerHandle handle3
           returns2 <- waitOnJobs handle3
           hPutStrLn stderr $ "returns: " ++ show returns2
           clearJobServer handle

@@ -145,7 +145,6 @@ redoIfChange = buildTargets redoIfChange'
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
   handle <- getJobServer
-  printJobServerHandle handle 
   keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
   let keepGoing' = fromMaybe "" keepGoing''
   let keepGoing = not $ null keepGoing'
@@ -156,10 +155,9 @@ buildTargets buildFunc targets = do
   resultHandles <- mapM waitBuild remainingTargets          
   --putWarningStrLn $ "res: " ++ show resultHandles
   -- Make sure we wait on all jobs and gather the exit codes before returning:
-  exitCodes <- mapM waitOnJobs resultHandles
-  putWarningStrLn $ "exits: " ++ show exitCodes
-  -- TODO: fix
-  return ExitSuccess
+  exitCodes <- flatten <$> mapM waitOnJobs resultHandles
+  --putWarningStrLn $ "exits: " ++ show exitCodes
+  returnExitCode exitCodes
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild :: JobServerHandle ExitCode -> Target -> IO (Target, LockFile, JobServerHandle ExitCode)
@@ -182,6 +180,11 @@ buildTargets buildFunc targets = do
                                                  buildHandle <- runJob handle $ buildFunc target
                                                  unlockFile lock
                                                  return buildHandle
+
+    -- Helper function for returning a failing code if it exists, otherwise return success
+    returnExitCode [] = return $ ExitSuccess
+    returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
+
     -- Special mapM which exits early if an operation fails
     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
     mapM' keepGoing f = mapM'' ExitSuccess
@@ -207,11 +210,21 @@ buildTargets buildFunc targets = do
             else return newExitCode
           else mapM_'' exitCode xs
 
+    flatten :: [[a]] -> [a]         
+    flatten xs = (\z n -> foldr (\x y -> foldr z y x) n xs) (:) []
+
     -- Special mapM' where each result is mapped as the first input to the next function
     mapMExtra :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
+    --mapMExtra :: (Target, LockFile, JobServerHandle ExitCode) -> IO (JobServerHandle ExitCode)
     mapMExtra _ a [] = return a
     mapMExtra f a (x:xs) = do newA <- f a x
                               mapMExtra f newA xs
+
+
+    --mapMExtra :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
+    --mapMExtra _ a [] = return a
+    --mapMExtra f a (x:xs) = do newA <- f a x
+    --                          mapMExtra f newA xs
 
 -- Run a do file in the do file directory on the given target:
 build :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode

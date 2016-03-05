@@ -103,7 +103,6 @@ mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
   -- Setup cache and job server for first run:
   handle <- initializeJobServer 1
-  printJobServerHandle handle
   initializeSession
   -- Perform the proper action based on the program name:
   case progName of 
