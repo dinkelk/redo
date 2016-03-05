@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database (clearCache, clearLockFiles, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
+module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
                  getIfChangeDeps, storePhonyTarget, createLockFile, markClean, storeIfCreateDep, 
                  markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
@@ -14,6 +14,7 @@ import Data.Bool (bool)
 import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
+import System.Environment (getEnv)
 
 import DatabaseEntry
 import PrettyPrint
@@ -36,7 +37,8 @@ redoMetaDirectory = getAppUserDataDirectory "redo"
 -- Directory for storing temporary data:
 redoTempDirectory :: IO FilePath
 redoTempDirectory = do base <- getTemporaryDirectory
-                       return $ base </> "redo"
+                       session <- getEnv "REDO_SESSION"
+                       return $ base </> "redo" </> session
 
 -- Directory for storing dependency database entries for redo targets and sources
 redoDatabaseDirectory :: IO FilePath
@@ -69,13 +71,9 @@ redoLockFileDirectory = do
 ---------------------------------------------------------------------
 -- Functions clearing meta data information
 ---------------------------------------------------------------------
--- Clear the entire redo cache directory:
-clearCache :: IO ()
-clearCache = safeRemoveDirectoryRecursive =<< redoCacheDirectory
-
--- Clear the entire redo cache directory:
-clearLockFiles :: IO ()
-clearLockFiles = safeRemoveDirectoryRecursive =<< redoLockFileDirectory
+-- Clear entire temporary directory:
+clearRedoTempDirectory :: IO ()
+clearRedoTempDirectory = safeRemoveDirectoryRecursive =<< redoTempDirectory
 
 ---------------------------------------------------------------------
 -- Functions getting database keys for targets

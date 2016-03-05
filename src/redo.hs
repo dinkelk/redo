@@ -100,16 +100,14 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
-  -- Remove old lock files and other cached files:
-  clearLockFiles
-  clearCache
-
+  sessionNumber <- randomRIO (0, 1000000::Int)
+  setEnv "REDO_SESSION" (show sessionNumber)
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> exitWith =<< redo targets'
+    "redo" -> exitWith' =<< redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
-    "redo-ifchange" -> exitWith =<< redoIfChange targets
+    "redo-ifchange" -> exitWith' =<< redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -121,6 +119,8 @@ mainTop progName targets = do
     runOutsideDoError :: String -> IO ()
     runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
                                    exitFailure
+    -- Clear out any temp files from this session
+    exitWith' code = clearRedoTempDirectory >> exitWith code
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()

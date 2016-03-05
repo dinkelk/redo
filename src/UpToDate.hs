@@ -5,15 +5,15 @@ module UpToDate (upToDate) where
 
 import Data.Maybe (isNothing, fromJust)
 import System.FilePath (takeExtension)
---import Debug.Trace (trace)
 
 import Types
 import Database 
 
 -- Debug helpers:
+--import Debug.Trace (trace)
 debug :: c -> String -> c
---debug = flip trace
 debug a _ = a
+--debug = flip trace
 
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
