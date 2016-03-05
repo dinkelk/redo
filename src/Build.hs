@@ -23,6 +23,7 @@ import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 -- Local imports:
 import Types
 import Database 
+import JobServer
 import UpToDate
 import PrettyPrint
 import FilePathUtil
@@ -143,6 +144,8 @@ redoIfChange = buildTargets redoIfChange'
 -- the files under lock contention
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
+  handle <- getJobServer
+  printJobServerHandle handle 
   keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
   let keepGoing' = fromMaybe "" keepGoing''
   let keepGoing = not $ null keepGoing'

@@ -4,7 +4,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getIfChangeDeps, storePhonyTarget, createLockFile, markClean, storeIfCreateDep, 
                  markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, LockFile(..), Key(..)) where
+                 isSource, getKey, LockFile(..), Key(..), initializeSession) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -14,7 +14,8 @@ import Data.Bool (bool)
 import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
-import System.Environment (getEnv)
+import System.Environment (getEnv, setEnv)
+import System.Random (randomRIO)
 
 import DatabaseEntry
 import PrettyPrint
@@ -30,6 +31,11 @@ newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Show, E
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
 ---------------------------------------------------------------------
+initializeSession :: IO ()
+initializeSession = do
+  sessionNumber <- randomRIO (0, 1000000::Int)
+  setEnv "REDO_SESSION" (show sessionNumber)
+
 -- Directory for storing and fetching data on dpendencies of redo targets.
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"

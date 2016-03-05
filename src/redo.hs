@@ -11,6 +11,7 @@ import System.Exit (exitSuccess, exitFailure, exitWith)
 import System.Random (randomRIO)
 
 -- Local imports:
+import JobServer
 import Database
 import PrettyPrint
 import Build
@@ -100,14 +101,16 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
-  sessionNumber <- randomRIO (0, 1000000::Int)
-  setEnv "REDO_SESSION" (show sessionNumber)
+  -- Setup cache and job server for first run:
+  handle <- initializeJobServer 1
+  printJobServerHandle handle
+  initializeSession
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
-    "redo" -> exitWith' =<< redo targets'
+    "redo" -> exitWith' handle =<< redo targets'
     -- Run redo-ifchange only on buildable files from the target's directory
-    "redo-ifchange" -> exitWith' =<< redoIfChange targets
+    "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -120,7 +123,7 @@ mainTop progName targets = do
     runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
                                    exitFailure
     -- Clear out any temp files from this session
-    exitWith' code = clearRedoTempDirectory >> exitWith code
+    exitWith' handle code = clearJobServer handle >> clearRedoTempDirectory >> exitWith code
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()
