@@ -150,30 +150,38 @@ buildTargets buildFunc targets = do
   let keepGoing' = fromMaybe "" keepGoing''
   let keepGoing = not $ null keepGoing'
   -- Try to lock file and build it, accumulate list of unbuilt files
-  remainingTargets <- mapM' keepGoing tryBuild targets 
+  remainingTargets <- mapM (tryBuild handle) targets 
+  --putWarningStrLn $ "rem: " ++ show remainingTargets
   -- Wait to acquire the lock, and build the remaining unbuilt files
-  mapM_' keepGoing waitBuild remainingTargets          
+  resultHandles <- mapM waitBuild remainingTargets          
+  --putWarningStrLn $ "res: " ++ show resultHandles
+  -- Make sure we wait on all jobs and gather the exit codes before returning:
+  exitCodes <- mapM waitOnJobs resultHandles
+  putWarningStrLn $ "exits: " ++ show exitCodes
+  -- TODO: fix
+  return ExitSuccess
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
-    tryBuild :: Target -> IO (Target, LockFile, ExitCode)
-    tryBuild target = do 
+    tryBuild :: JobServerHandle ExitCode -> Target -> IO (Target, LockFile, JobServerHandle ExitCode)
+    tryBuild handle target = do 
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
-    tryBuild' :: Target -> IO (Target, LockFile, ExitCode)
-    tryBuild' target = do lckFileName <- createLockFile target 
-                          maybe (return (target, lckFileName, ExitSuccess)) (runBuild target) 
-                            =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
-    runBuild :: Target -> FileLock -> IO (Target, LockFile, ExitCode)
-    runBuild target lock = do exitCode <- buildFunc target
-                              unlockFile lock
-                              return (Target "", LockFile "", exitCode)
+      where
+        tryBuild' :: Target -> IO (Target, LockFile, JobServerHandle ExitCode)
+        tryBuild' target = do lckFileName <- createLockFile target 
+                              maybe (return (target, lckFileName, handle)) (runBuild target) 
+                                =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
+        runBuild :: Target -> FileLock -> IO (Target, LockFile, JobServerHandle ExitCode)
+        runBuild target lock = do buildHandle <- runJob handle $ buildFunc target
+                                  unlockFile lock
+                                  return (Target "", LockFile "", buildHandle)
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (Target, LockFile, ExitCode) -> IO ExitCode 
-    waitBuild (Target "", LockFile "", exitCode) = return exitCode
-    waitBuild (target, lckFileName, _) = do lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
-                                            exitCode <- buildFunc target
-                                            unlockFile lock
-                                            return exitCode
+    waitBuild :: (Target, LockFile, JobServerHandle ExitCode) -> IO (JobServerHandle ExitCode)
+    waitBuild (Target "", LockFile "", handle) = return handle
+    waitBuild (target, lckFileName, handle) = do lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
+                                                 buildHandle <- runJob handle $ buildFunc target
+                                                 unlockFile lock
+                                                 return buildHandle
     -- Special mapM which exits early if an operation fails
     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
     mapM' keepGoing f = mapM'' ExitSuccess
@@ -198,6 +206,12 @@ buildTargets buildFunc targets = do
             if keepGoing then mapM_'' newExitCode xs
             else return newExitCode
           else mapM_'' exitCode xs
+
+    -- Special mapM' where each result is mapped as the first input to the next function
+    mapMExtra :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
+    mapMExtra _ a [] = return a
+    mapMExtra f a (x:xs) = do newA <- f a x
+                              mapMExtra f newA xs
 
 -- Run a do file in the do file directory on the given target:
 build :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
