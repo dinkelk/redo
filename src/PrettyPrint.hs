@@ -18,9 +18,16 @@ bold = "\x1b[1m"
 plain :: String
 plain = "\x1b[m"
 
+-- Print function that works well in a threaded environment
+putStrBuffered :: String -> IO ()
+putStrBuffered string = do hSetBuffering stderr LineBuffering
+                           hFlush stdout
+                           hPutStrLn stderr $ string
+                           hFlush stderr
+
 -- Put string to console in color:
 putColorStrLn :: String -> String -> IO ()
-putColorStrLn color string = hPutStrLn stderr $ color ++ bold ++ string ++ plain
+putColorStrLn color string = putStrBuffered $ color ++ bold ++ string ++ plain
 
 -- Put info, warning, error strings to console:
 putUnformattedStrLn :: String -> IO ()
@@ -36,7 +43,4 @@ putStatusStrLn = putColorStrLn cyan
 
 -- Special function to format and print the redo status message of what is being built:
 putRedoStatus :: Int -> FilePath -> IO ()
-putRedoStatus depth file = do hSetBuffering stderr LineBuffering
-                              hFlush stdout
-                              hPutStrLn stderr $ green ++ "redo  " ++ concat (replicate depth "  " ) ++ bold ++ file ++ plain
-                              hFlush stderr
+putRedoStatus depth file = putStrBuffered $ green ++ "redo  " ++ concat (replicate depth "  " ) ++ bold ++ file ++ plain
