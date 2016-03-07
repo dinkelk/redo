@@ -17,10 +17,67 @@ import PrettyPrint
 import Build
 import Types
 
+-- Redo options:
+data Options = Options {
+  help :: Bool,
+  dashX :: Bool,
+  dashV :: Bool,
+  keepGoing :: Bool,
+  jobs :: Int,
+  shuffle :: Bool
+}
+
+-- Redo default options:
+defaultOptions :: Options
+defaultOptions = Options {
+  help = False,
+  dashX = False,
+  dashV = False,
+  keepGoing = False,
+  jobs = 1,
+  shuffle = False 
+}
+
+-- Define program options:
+-- The arguments to Option are:
+-- 1) list of short option characters
+-- 2) list of long option strings (without "--")
+-- 3) argument descriptor
+-- 4) explanation of option for user
+options :: [OptDescr (Options -> IO Options)]
+options =
+  [ Option ['j']      ["jobs"]        (ReqArg setOptJobs "numJobs")         "maximum number of parallel jobs to build at once"
+  , Option ['h','H']  ["help"]        (NoArg setHelp)       "show usage details"
+  , Option ['x']      ["xtrace"]      (NoArg setDashX)      "print commands as they are executed with variables expanded"
+  , Option ['v']      ["verbose"]     (NoArg setDashV)      "print commands as they are read from .do files"
+  , Option ['V','?']  ["version"]     (NoArg printVersion)                  "print the version number"
+  , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)  "keep building even if some targets fail"
+  , Option ['s']      ["shuffle"]     (NoArg setShuffle)    "randomize the build order to find dependency bugs"
+  ]
+
+-- Helper functions for setting the options:
+setOptJobs :: String -> Options -> IO Options
+setOptJobs cmdLineArg opt = return opt { jobs = read $ cmdLineArg :: Int }
+
+setHelp :: Options -> IO Options
+setHelp opt = return opt { help = True }
+
+setDashX :: Options -> IO Options
+setDashX opt = return opt { dashX = True }
+
+setDashV :: Options -> IO Options
+setDashV opt = return opt { dashV = True }
+
+setKeepGoing :: Options -> IO Options
+setKeepGoing opt = return opt { keepGoing = True }
+
+setShuffle :: Options -> IO Options
+setShuffle opt = return opt { shuffle = True }
+
 -- Print the program version and license information:
-printVersion :: IO ()
-printVersion = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
-                  exitSuccess
+printVersion :: Options -> IO (Options)
+printVersion _ = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
+                    exitSuccess
 
 -- Print the program's help details:
 printHelp :: String -> [OptDescr a] -> [String] -> IO b
@@ -29,81 +86,69 @@ printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts
                                                else ioError (userError (concat errs ++ helpStr opts))
   where helpStr = usageInfo $ "Usage: " ++ programName ++ " [OPTION...] targets..."
 
--- Define program options:
--- The arguments to Option are:
--- 1) list of short option characters
--- 2) list of long option strings (without "--")
--- 3) argument descriptor
--- 4) explanation of option for user
-data Flag = Version | Help | DashX | DashV | KeepGoing | Jobs | Shuffle deriving (Eq,Ord,Enum,Show,Bounded) 
-options :: [OptDescr Flag]
-options =
-  [ Option ['j']         ["jobs"]          (NoArg Jobs)          "maximum number of parallel jobs to build at once (not yet supported!)"
-  , Option ['h','H']     ["help"]          (NoArg Help)          "show usage details"
-  , Option ['x']         ["xtrace"]        (NoArg DashX)         "print commands as they are executed with variables expanded"
-  , Option ['v']         ["verbose"]       (NoArg DashV)         "print commands as they are read from .do files"
-  , Option ['V','?']     ["version"]       (NoArg Version)       "print the version number"
-  , Option ['k']         ["keep-going"]    (NoArg KeepGoing)     "keep building even if some targets fail"
-  , Option ['s']         ["shuffle"]       (NoArg Shuffle)       "randomize the build order to find dependency bugs"
-  ]
-
 -- Helper function to get parse through commandline arguments and return options:
-getOptions :: [String] -> IO ([Flag], [String])
-getOptions argv = 
-  case getOpt Permute options argv of
-    (o,n,[]  ) -> return (o,n)
+getOptions :: IO (Options, [String])
+getOptions = do
+  args <- getArgs
+  case getOpt Permute options args of
+    (o,n,[]  ) -> do o' <- setOptions o
+                     return (o',n)
     (_,_,errs) -> do programName <- getProgName
                      printHelp programName options errs 
+  where setOptions o = foldl (>>=) (return defaultOptions) o
 
 -- Main function:
 main :: IO ()
 main = do 
   
   -- Get program name and arguments:
-  args <- getArgs
   progName <- getProgName
 
   -- Parse options, getting a list of option actions:
-  opts <- getOptions args
-  let (flags, targets) = opts 
+  (opts, targets) <- getOptions
+  let Options { help = help', 
+                dashX = dashX',
+                dashV = dashV',
+                keepGoing = keepGoing',
+                jobs = jobs',
+                shuffle = shuffle'} = opts
 
   -- Show help or version information if asked:
-  when (Version `elem` flags) printVersion
-  when (Help `elem` flags) (printHelp progName options [])
-  when (KeepGoing `elem` flags) (setEnv "REDO_KEEP_GOING" "TRUE")
-  when (Shuffle `elem` flags) (setEnv "REDO_SHUFFLE" "TRUE")
+  when (help') (printHelp progName options [])
+  when (keepGoing') (setEnv "REDO_KEEP_GOING" "TRUE")
+  when (shuffle') (setEnv "REDO_SHUFFLE" "TRUE")
 
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
-  let shellArgs = intercalate "" [if DashX `elem` flags then "x" else "",
-                                  if DashV `elem` flags then "v" else ""]
+  let shellArgs = intercalate "" [if dashX' then "x" else "",
+                                  if dashV' then "v" else ""]
   unless (null shellArgs) (setEnv "REDO_SHELL_ARGS" shellArgs)
 
   -- Set the redo path variable to the current directory for the first call:
-  redoInitPath <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
+  redoInitPath <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
   -- Run the main:
-  mainToRun' <- mainToRun
+  mainToRun' <- mainToRun jobs'
   mainToRun' progName =<< targetsToRun targets
   where
     -- Shuffle the targets if required:
     targetsToRun targets = do shuffleTargets' <- lookupEnv "REDO_SHUFFLE"
                               let shuffleTargets = fromMaybe "" shuffleTargets'
                               if null shuffleTargets then return targets'
-                              else shuffle targets'
+                              else shuffleList targets'
       where targets' = map Target targets
     -- Check if redo is being run from inside of a .do file, or if this is the top level run
     -- Run the correct main accordingly
-    mainToRun = do runFromDoFile <- isRunFromDoFile
-                   return $ if runFromDoFile then mainDo else mainTop
+    mainToRun numJobs = do runFromDoFile <- isRunFromDoFile
+                           return $ if runFromDoFile then mainDo else mainTop numJobs
 
 -- The main function for redo run at a top level (outside of a .do file)
-mainTop :: String -> [Target] -> IO()
-mainTop progName targets = do
-  --putWarningStrLn $ "+running with targets: " ++ show targets
+mainTop :: Int -> String -> [Target] -> IO()
+mainTop numJobs progName targets = do
+  -- TODO consider throwing signal to terminate misbehaving process ;)
   -- Setup cache and job server for first run:
-  handle <- initializeJobServer 8
+  handle <- initializeJobServer numJobs
   initializeSession
   -- Perform the proper action based on the program name:
   case progName of 
@@ -146,8 +191,8 @@ mainDo progName targets = do
 
 -- Randomly shuffle the order of a list:
 -- http://en.literateprograms.org/Fisher-Yates_shuffle_(Haskell)
-shuffle :: [a] -> IO [a]
-shuffle lst = shuffle' lst []
+shuffleList :: [a] -> IO [a]
+shuffleList lst = shuffle' lst []
   where
     shuffle' [] acc = return acc
     shuffle' l acc =
