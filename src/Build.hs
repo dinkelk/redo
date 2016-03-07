@@ -7,15 +7,14 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 
 -- System imports:
 import Control.Applicative ((<$>))
-import Control.Concurrent (myThreadId)
 import Control.Monad (unless)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
 import Data.Bool (bool)
-import System.Directory (removeDirectoryRecursive, doesDirectoryExist, setCurrentDirectory, renameFile, renameDirectory, removeFile, getCurrentDirectory)
+import System.Directory (removeDirectoryRecursive, doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv, getEnv)
-import System.Exit (ExitCode(..), exitFailure)
+import System.Exit (ExitCode(..))
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
@@ -102,7 +101,7 @@ redo = buildTargets redo'
           modified <- isTargetModified key currentStamp
           if source then targetSourceWarning target
           else if modified then targetModifiedWarning target
-          else maybe (noDoFileError target) (build key target currentStamp) =<< findDoFile target
+          else maybe (noDoFileError target) (runDoFile key target currentStamp) =<< findDoFile target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [Target] -> IO ExitCode
@@ -124,7 +123,7 @@ redoIfChange = buildTargets redoIfChange'
             --putStatusStrLn $ "redo-ifchange " ++ unTarget target
             upToDate' <- upToDate key target
             -- Try to run redo if out of date, if it fails, print an error message:
-            unless' upToDate' (maybe (missingDo key target) (build key target currentStamp) =<< findDoFile target)
+            unless' upToDate' (maybe (missingDo key target) (runDoFile key target currentStamp) =<< findDoFile target)
     -- Custom unless which return ExitSuccess if the condition is met
     unless' condition action = if condition then return ExitSuccess else action
     -- If a do file is not found then return an error message, unless the file exists,
@@ -160,18 +159,17 @@ buildTargets buildFunc targets = do
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild :: JobServerHandle ExitCode -> Target -> IO (Target, LockFile, JobServerHandle ExitCode)
     tryBuild handle target = do 
-      cwd <- getCurrentDirectory
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
       where
         tryBuild' :: Target -> IO (Target, LockFile, JobServerHandle ExitCode)
-        tryBuild' target = do lckFileName <- createLockFile target 
-                              maybe (return (target, lckFileName, handle)) (runBuild target) 
-                                =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
+        tryBuild' absTarget = do lckFileName <- createLockFile absTarget
+                                 maybe (return (absTarget , lckFileName, handle)) (runBuild absTarget) 
+                                   =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
         runBuild :: Target -> FileLock -> IO (Target, LockFile, JobServerHandle ExitCode)
-        runBuild target lock = do buildHandle <- runJob handle $ buildFunc target
-                                  unlockFile lock
-                                  return (Target "", LockFile "", buildHandle)
+        runBuild absTarget lock = do buildHandle <- runJob handle $ buildFunc absTarget 
+                                     unlockFile lock
+                                     return (Target "", LockFile "", buildHandle)
     -- Wait to build the target if the do file is given, regardless of lock contention:
     waitBuild :: (Target, LockFile, JobServerHandle ExitCode) -> IO (JobServerHandle ExitCode)
     waitBuild (Target "", LockFile "", handle) = return handle
@@ -213,25 +211,6 @@ buildTargets buildFunc targets = do
 
     flatten :: [[a]] -> [a]         
     flatten xs = (\z n -> foldr (\x y -> foldr z y x) n xs) (:) []
-
--- Run a do file in the do file directory on the given target:
-build :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
-build key target currentTimeStamp doFile = performActionInDir 
-                                           (takeDirectory $ unDoFile doFile) 
-                                           (runDoFile key target currentTimeStamp) doFile
-
--- Run an action on a parameter and return an exit code within a certain directory
--- TODO can no longer do this. We need to address the do file form asbsolute path
--- not change directory, but pass the do file targets relative to its directory
-performActionInDir :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
-performActionInDir dir action arg = do
-  --topDir <- getCurrentDirectory
-  --catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-  --  putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-  --  exitFailure)
-  exitCode <- action arg
-  --setCurrentDirectory topDir
-  return exitCode
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
@@ -371,7 +350,7 @@ runDoFile key target currentTimeStamp doFile = do
 shellCmd :: String -> DoFile -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile' target]
+  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile']
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
@@ -385,7 +364,7 @@ shellCmd shellArgs doFile target = do
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
-    tmpStdoutFile' target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+    tmpStdoutFile' = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
     quote string = "\"" ++ string ++ "\""
     arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
     doExtensions = (takeExtensions . dropExtension . unDoFile) doFile -- remove .do, then grab the rest of the extensions
@@ -405,8 +384,6 @@ tmpStdoutFile :: FilePath -> Target -> FilePath
 -- Stdout file name. Note we make this in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
--- TODO remove?
---tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 tmpStdoutFile dir target = dir </> takeFileName(unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Function to check if file exists, and if it does, remove it:
