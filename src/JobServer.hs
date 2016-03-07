@@ -97,6 +97,7 @@ runJob handle j = maybe runJob' forkJob =<< getToken r
       --hPutStrLn stderr $ "fork process " ++ unToken token
       -- consider using fork finally
       _ <- forkOS $ runForkedJob mToken mReturn w j
+      --hPutStrLn stderr $ "forked " ++ show id_
       putMVar mToken token
       return $ JobServerHandle (r, w, mReturns++[mReturn])
     runJob' = do ret <- j

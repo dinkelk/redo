@@ -7,6 +7,7 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 
 -- System imports:
 import Control.Applicative ((<$>))
+import Control.Concurrent (myThreadId)
 import Control.Monad (unless)
 import Control.Exception (catch, SomeException(..))
 import Data.Map.Lazy (adjust, insert, fromList, toList)
@@ -139,7 +140,7 @@ redoIfChange = buildTargets redoIfChange'
 -- file initially, and continue to trying to run the function on the next
 -- file in the list. In a second pass, wait as long as it takes to lock 
 -- on the files that were initially skipped before running the function.
--- This function allows us to build all the targets that don't have any 
+-- This function allows us to build all the targets that don't havabsTarget
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
@@ -150,18 +151,16 @@ buildTargets buildFunc targets = do
   let keepGoing = not $ null keepGoing'
   -- Try to lock file and build it, accumulate list of unbuilt files
   remainingTargets <- mapM (tryBuild handle) targets 
-  --putWarningStrLn $ "rem: " ++ show remainingTargets
   -- Wait to acquire the lock, and build the remaining unbuilt files
   resultHandles <- mapM waitBuild remainingTargets          
-  --putWarningStrLn $ "res: " ++ show resultHandles
   -- Make sure we wait on all jobs and gather the exit codes before returning:
   exitCodes <- flatten <$> mapM waitOnJobs resultHandles
-  --putWarningStrLn $ "exits: " ++ show exitCodes
   returnExitCode exitCodes
   where
     -- Try to build the target if the do file can be found and there is no lock contention:
     tryBuild :: JobServerHandle ExitCode -> Target -> IO (Target, LockFile, JobServerHandle ExitCode)
     tryBuild handle target = do 
+      cwd <- getCurrentDirectory
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
       where
@@ -186,6 +185,7 @@ buildTargets buildFunc targets = do
     returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
 
     -- Special mapM which exits early if an operation fails
+    -- TODO remove
     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
     mapM' keepGoing f = mapM'' ExitSuccess
       where 
@@ -199,6 +199,7 @@ buildTargets buildFunc targets = do
           where runNext code current = do next <- mapM'' code xs
                                           return $ current : next
     -- Special mapM_ which exits early if an operation fails
+    -- TODO remove
     mapM_' :: Bool -> ((Target, LockFile, ExitCode) -> IO ExitCode) -> [(Target, LockFile, ExitCode)] -> IO ExitCode
     mapM_' keepGoing f = mapM_'' ExitSuccess
       where 
@@ -213,19 +214,6 @@ buildTargets buildFunc targets = do
     flatten :: [[a]] -> [a]         
     flatten xs = (\z n -> foldr (\x y -> foldr z y x) n xs) (:) []
 
-    -- Special mapM' where each result is mapped as the first input to the next function
-    mapMExtra :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
-    --mapMExtra :: (Target, LockFile, JobServerHandle ExitCode) -> IO (JobServerHandle ExitCode)
-    mapMExtra _ a [] = return a
-    mapMExtra f a (x:xs) = do newA <- f a x
-                              mapMExtra f newA xs
-
-
-    --mapMExtra :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
-    --mapMExtra _ a [] = return a
-    --mapMExtra f a (x:xs) = do newA <- f a x
-    --                          mapMExtra f newA xs
-
 -- Run a do file in the do file directory on the given target:
 build :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
 build key target currentTimeStamp doFile = performActionInDir 
@@ -233,14 +221,16 @@ build key target currentTimeStamp doFile = performActionInDir
                                            (runDoFile key target currentTimeStamp) doFile
 
 -- Run an action on a parameter and return an exit code within a certain directory
+-- TODO can no longer do this. We need to address the do file form asbsolute path
+-- not change directory, but pass the do file targets relative to its directory
 performActionInDir :: FilePath -> (t -> IO ExitCode) -> t -> IO ExitCode
 performActionInDir dir action arg = do
-  topDir <- getCurrentDirectory
-  catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
-    putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
-    exitFailure)
+  --topDir <- getCurrentDirectory
+  --catch (setCurrentDirectory dir) (\(_ :: SomeException) -> do 
+  --  putErrorStrLn $ "Error: No such directory " ++ topDir </> dir
+  --  exitFailure)
   exitCode <- action arg
-  setCurrentDirectory topDir
+  --setCurrentDirectory topDir
   return exitCode
 
 -- Run the do script. Note: this must be run in the do file's directory!:
@@ -254,7 +244,8 @@ runDoFile key target currentTimeStamp doFile = do
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
-  redoPath <- getCurrentDirectory                     -- Current redo path
+  let redoPath = takeDirectory $ unDoFile doFile
+  --redoPath <- getCurrentDirectory                     -- Current redo path
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
@@ -264,6 +255,8 @@ runDoFile key target currentTimeStamp doFile = do
   let targetRel2Do = Target $ makeRelative' redoPath (unTarget target)
   cmd <- shellCmd shellArgs doFile targetRel2Do
   targetIsDirectory <- doesDirectoryExist $ unTarget target
+
+  id_ <- myThreadId
 
   -- Print what we are currently "redoing"
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
@@ -279,7 +272,6 @@ runDoFile key target currentTimeStamp doFile = do
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
-                      $ insert "REDO_PATH" redoPath
                       $ insert "REDO_SESSION" sessionNumber
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
@@ -289,7 +281,7 @@ runDoFile key target currentTimeStamp doFile = do
                       $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv}
+  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
   exit <- waitForProcess processHandle
   case exit of  
     ExitSuccess -> do exitCode <- moveTempFiles targetIsDirectory 
@@ -407,7 +399,9 @@ tmpStdoutFile :: Target -> FilePath
 -- Stdout file name. Note we make this in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
-tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+-- TODO remove?
+--tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+tmpStdoutFile target = unTarget target ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Remove the temporary files created for a target:
 removeTempFiles :: Target -> IO ()

@@ -101,8 +101,9 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
+  --putWarningStrLn $ "+running with targets: " ++ show targets
   -- Setup cache and job server for first run:
-  handle <- initializeJobServer 1
+  handle <- initializeJobServer 3
   initializeSession
   -- Perform the proper action based on the program name:
   case progName of 
@@ -126,7 +127,8 @@ mainTop progName targets = do
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()
-mainDo progName targets =
+mainDo progName targets = do
+  --putWarningStrLn $ "running with targets: " ++ show targets
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory
