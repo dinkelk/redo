@@ -244,7 +244,6 @@ runDoFile key target currentTimeStamp doFile = do
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
-  let redoPath = takeDirectory $ unDoFile doFile
   --redoPath <- getCurrentDirectory                     -- Current redo path
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
@@ -255,8 +254,6 @@ runDoFile key target currentTimeStamp doFile = do
   let targetRel2Do = Target $ makeRelative' redoPath (unTarget target)
   cmd <- shellCmd shellArgs doFile targetRel2Do
   targetIsDirectory <- doesDirectoryExist $ unTarget target
-
-  id_ <- myThreadId
 
   -- Print what we are currently "redoing"
   putRedoStatus (read redoDepth :: Int) (makeRelative' redoInitPath (unTarget target))
@@ -290,7 +287,7 @@ runDoFile key target currentTimeStamp doFile = do
                         =<< getBuiltTargetPath key target
                       bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
     ExitFailure code -> do markDirty key -- we failed to build this target, so mark it dirty
-                           removeTempFiles target
+                           removeTempFiles
                            nonZeroExitStr code
                            return $ ExitFailure code
   where
@@ -303,11 +300,19 @@ runDoFile key target currentTimeStamp doFile = do
       stamp <- stampTarget builtTarget
       storeStamp key stamp
       markClean key -- we just built this target, so we know it is clean now
-      removeTempFiles target
+      removeTempFiles
+
+    -- Remove the temporary files created for a target:
+    removeTempFiles :: IO ()
+    removeTempFiles = do safeRemoveTempFile tmp3
+                         safeRemoveTempFile tmpStdout
       
     -- Temporary file names:
+    redoPath = takeDirectory $ unDoFile doFile
     tmp3 = tmp3File target 
-    tmpStdout = tmpStdoutFile target 
+    tmpStdout = tmpStdoutFile redoPath target 
+
+    -- Move temp files to target after creation:
     moveTempFiles :: Bool -> IO Int
     moveTempFiles targetIsDirectory = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
@@ -366,7 +371,7 @@ runDoFile key target currentTimeStamp doFile = do
 shellCmd :: String -> DoFile -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile target]
+  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile' target]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
@@ -380,6 +385,7 @@ shellCmd shellArgs doFile target = do
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
+    tmpStdoutFile' target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
     quote string = "\"" ++ string ++ "\""
     arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
     doExtensions = (takeExtensions . dropExtension . unDoFile) doFile -- remove .do, then grab the rest of the extensions
@@ -395,19 +401,14 @@ shellCmd shellArgs doFile target = do
 -- Temporary files:
 tmp3File :: Target -> FilePath
 tmp3File target = unTarget target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-tmpStdoutFile :: Target -> FilePath
+tmpStdoutFile :: FilePath -> Target -> FilePath
 -- Stdout file name. Note we make this in the current directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
 -- file.
 -- TODO remove?
 --tmpStdoutFile target = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
-tmpStdoutFile target = unTarget target ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+tmpStdoutFile dir target = dir </> takeFileName(unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
--- Remove the temporary files created for a target:
-removeTempFiles :: Target -> IO ()
-removeTempFiles target = do safeRemoveTempFile $ tmp3File target
-                            safeRemoveTempFile $ tmpStdoutFile target
-                     
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()
 safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> removeDir)

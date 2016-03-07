@@ -103,7 +103,7 @@ mainTop :: String -> [Target] -> IO()
 mainTop progName targets = do
   --putWarningStrLn $ "+running with targets: " ++ show targets
   -- Setup cache and job server for first run:
-  handle <- initializeJobServer 3
+  handle <- initializeJobServer 8
   initializeSession
   -- Perform the proper action based on the program name:
   case progName of 
