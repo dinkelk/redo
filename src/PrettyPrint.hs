@@ -1,11 +1,12 @@
 
 module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putStatusStrLn, putRedoStatus, putUnformattedStrLn) where
 
-import System.IO (hIsTerminalDevice, hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout)
-import Data.Maybe (isJust)
-import System.Environment (lookupEnv)
+import System.IO (hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout)
 
 -- ANSI color definitions:
+-- import Data.Maybe (isJust)
+-- import System.Environment (lookupEnv)
+-- import System.IO (hIsTerminalDevice)
 -- TODO make these "" if terminal is not smart
 -- isSmartTerminal :: IO Bool
 -- isSmartTerminal = do term1 <- lookupEnv "TERM"
