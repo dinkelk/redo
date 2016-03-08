@@ -3,7 +3,7 @@
 module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, runJob, waitOnJobs,
                   JobServerHandle, tryWaitOnJobs) where
 
-import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, tryTakeMVar, MVar, threadDelay, forkOS)
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, tryTakeMVar, MVar, threadDelay, forkOS, forkIO)
 import Control.Exception.Base (assert)
 import Control.Exception (catch, SomeException(..))
 import Foreign.C.Types (CInt)
@@ -11,6 +11,8 @@ import System.Environment (getEnv, setEnv)
 import System.Posix.IO (createPipe, fdWrite, fdRead, FdOption(..), setFdOption, closeFd)
 import System.Posix.Types (Fd(..), ByteCount)
 import System.IO (hPutStrLn, stderr)
+
+import PrettyPrint
 
 newtype JobServerHandle a = JobServerHandle { unJobServerHandle :: (Fd, Fd, [MVar a]) }
 newtype Token = Token { unToken :: String } deriving (Eq, Show)
@@ -64,23 +66,22 @@ runJobs handle (j:jobs) = maybe runJob' forkJob =<< getToken r
       --hPutStrLn stderr $ "read " ++ unToken token ++ " from pipe. "
 
       -- Fork new thread to run job:
-      mToken <- newEmptyMVar
+      --mToken <- newEmptyMVar
       mReturn <- newEmptyMVar
       --hPutStrLn stderr $ "fork process " ++ unToken token
       -- consider using fork finally
       -- consider putting thread id in handle so that it can be killed on error
-      _ <- forkOS $ runForkedJob mToken mReturn w j
-      putMVar mToken token
+      _ <- forkIO $ runForkedJob token mReturn w j
+      --putMVar mToken token
 
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
 
       -- Wait on my forked job:
-      --hPutStrLn stderr $ "waiting on " ++ unToken token
       ret1 <- takeMVar mReturn
       return $ ret1:rets 
-      --hPutStrLn stderr $ "reaped " ++ unToken returnedToken
-    runJob' = do ret1 <- j
+    runJob' = do --putWarningStrLn $ "running with: 0" 
+                 ret1 <- j
                  rets <- runJobs handle jobs
                  return $ ret1:rets 
 
@@ -92,23 +93,23 @@ runJob handle j = maybe runJob' forkJob =<< getToken r
       --hPutStrLn stderr $ "read " ++ unToken token ++ " from pipe. "
 
       -- Fork new thread to run job:
-      mToken <- newEmptyMVar
+      --mToken <- newEmptyMVar
       mReturn <- newEmptyMVar
       --hPutStrLn stderr $ "fork process " ++ unToken token
       -- consider using fork finally
-      _ <- forkOS $ runForkedJob mToken mReturn w j
+      _ <- forkIO $ runForkedJob token mReturn w j
       --hPutStrLn stderr $ "forked " ++ show id_
-      putMVar mToken token
+      --putMVar mToken token
       return $ JobServerHandle (r, w, mReturns++[mReturn])
     runJob' = do ret <- j
                  mReturn <- newEmptyMVar
                  putMVar mReturn ret
                  return $ JobServerHandle (r, w, mReturns++[mReturn])
 
-runForkedJob :: MVar (Token) -> MVar (a) -> Fd -> IO a -> IO ()
-runForkedJob mToken mReturn w job = do 
-  token <- takeMVar mToken
+runForkedJob :: Token -> MVar (a) -> Fd -> IO a -> IO ()
+runForkedJob token mReturn w job = do 
   --hPutStrLn stderr $ "-- starting job with token: " ++ unToken token
+  --putWarningStrLn $ "running with: " ++ unToken token
   ret <- job
   --hPutStrLn stderr $ "-- finished job with token: " ++ unToken token
 

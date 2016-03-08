@@ -1,10 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
-                 getIfChangeDeps, storePhonyTarget, createLockFile, markClean, storeIfCreateDep, 
+                 getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, getLockFileDatabase,
                  markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, LockFile(..), Key(..), initializeSession) where
+                 isSource, getKey, Key(..), initializeSession) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -26,7 +26,6 @@ import Types
 -- Type Definitions:
 ---------------------------------------------------------------------
 newtype Key = Key { keyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
-newtype LockFile = LockFile { lockFileToFilePath :: FilePath } deriving (Show, Eq) -- A lock file for synchronizing access to meta directories
 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
@@ -157,18 +156,6 @@ initializeSourceDatabase key target = do
 -- Get the database directory for a target:
 doesDatabaseExist :: Key -> IO Bool
 doesDatabaseExist key = doesDirectoryExist =<< getDatabase key
-
--- Return the lock file name for a target:
-createLockFile :: Target -> IO LockFile
-createLockFile target = do
-  key <- getKey target
-  createLockFile' key
-
-createLockFile' :: Key -> IO LockFile
-createLockFile' key = do 
-  lockFileDir <- getLockFileDatabase key
-  safeCreateDirectoryRecursive lockFileDir 
-  return $ LockFile $ lockFileDir </> "l"
 
 ---------------------------------------------------------------------
 -- Functions getting database entries:

@@ -1,17 +1,22 @@
 
-module PrettyPrint(putInfoStrLn, putWarningStrLn, putErrorStrLn, putStatusStrLn, putRedoStatus, putUnformattedStrLn) where
+module PrettyPrint(putRedoUnformatted, putRedoInfo, putRedoWarning, putRedoStatus, putInfoStrLn, putWarningStrLn, putErrorStrLn, putStatusStrLn, putRedoStatus, putUnformattedStrLn) where
 
 import System.IO (hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout)
+import Data.Maybe (fromJust, isNothing)
+import System.Environment (lookupEnv)
 
 -- ANSI color definitions:
 -- import Data.Maybe (isJust)
 -- import System.Environment (lookupEnv)
 -- import System.IO (hIsTerminalDevice)
--- TODO make these "" if terminal is not smart
+-- TODO make these "" if terminal is not smart yes now or on switch
 -- isSmartTerminal :: IO Bool
 -- isSmartTerminal = do term1 <- lookupEnv "TERM"
 --                      term2 <- hIsTerminalDevice stderr
 --                      return $ term2 && isJust term1
+
+import FilePathUtil
+import Types
 
 red :: String
 red = "\x1b[31m"
@@ -49,6 +54,39 @@ putErrorStrLn = putColorStrLn red
 putStatusStrLn :: String -> IO ()
 putStatusStrLn = putColorStrLn cyan
 
--- Special function to format and print the redo status message of what is being built:
-putRedoStatus :: Int -> FilePath -> IO ()
-putRedoStatus depth file = putStrBuffered $ green ++ "redo  " ++ concat (replicate depth "  " ) ++ bold ++ file ++ plain
+putRedo :: String -> Target -> String -> IO ()
+putRedo color target string = do
+  depth <- getDepth
+  target' <- getRelativeTarget target
+  putStrBuffered $ color ++ "redo  " ++ depth ++ bold ++ target' ++ " " ++ string ++ plain
+
+getDepth :: IO String
+getDepth = do
+  redoDepth' <- lookupEnv "REDO_DEPTH"                -- Depth of recursion for this call to redo
+  let redoDepth = if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
+  return $ concat (replicate redoDepth "  " )
+
+getRelativeTarget :: Target -> IO FilePath
+getRelativeTarget target = do
+  redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
+  let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
+  return $ makeRelative' redoInitPath (unTarget target)
+
+putRedoInfo :: Target -> IO ()
+putRedoInfo target = putRedo green target ""
+
+putRedoStatus :: Target -> String -> IO ()
+putRedoStatus target string = putRedo cyan target ("- " ++ string)
+
+putRedoWarning :: Target -> String -> IO ()
+putRedoWarning target string = putRedo yellow target ("- " ++ string)
+
+putRedoError :: Target -> String -> IO ()
+putRedoError target string = putRedo red target ("- " ++ string)
+
+putRedoUnformatted :: Target -> String -> IO ()
+putRedoUnformatted target string = putRedo "" target ("- " ++ string)
+
+
+
+
