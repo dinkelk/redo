@@ -104,7 +104,7 @@ depsUpToDate level target key = do
   else do 
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     ifCreateDeps <- getIfCreateDeps key
-    depCreated' <- mapOr (doesTargetExist) ifCreateDeps
+    depCreated' <- mapOr doesTargetExist ifCreateDeps
     if depCreated' then return False `debug'` "-dep created"
     else do
       -- redo-ifchange - check these files hashes against those stored to determine if they are up to date

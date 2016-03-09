@@ -4,7 +4,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, getLockFileDatabase,
                  markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, Key(..), initializeSession) where
+                 isSource, getKey, Key(..), initializeSession, createLockFile) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -216,6 +216,12 @@ getCleanEntry = getCacheEntry "c"
 getDirtyEntry :: Key -> IO Entry
 getDirtyEntry = getCacheEntry "d"
 
+createLockFile :: Target -> IO FilePath
+createLockFile target = do 
+   key <- getKey target
+   lockFileDir <- getLockFileDatabase key
+   safeCreateDirectoryRecursive lockFileDir 
+   return $ lockFileDir </> "l"
 ---------------------------------------------------------------------
 -- Functions getting database values:
 ---------------------------------------------------------------------

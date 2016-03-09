@@ -24,7 +24,8 @@ data Options = Options {
   dashV :: Bool,
   keepGoing :: Bool,
   jobs :: Int,
-  shuffle :: Bool
+  shuffle :: Bool,
+  noColor :: Bool
 }
 
 -- Redo default options:
@@ -35,7 +36,8 @@ defaultOptions = Options {
   dashV = False,
   keepGoing = False,
   jobs = 1,
-  shuffle = False 
+  shuffle = False,
+  noColor = False 
 }
 
 -- Define program options:
@@ -46,18 +48,19 @@ defaultOptions = Options {
 -- 4) explanation of option for user
 options :: [OptDescr (Options -> IO Options)]
 options =
-  [ Option ['j']      ["jobs"]        (ReqArg setOptJobs "numJobs")         "maximum number of parallel jobs to build at once"
-  , Option ['h','H']  ["help"]        (NoArg setHelp)       "show usage details"
-  , Option ['x']      ["xtrace"]      (NoArg setDashX)      "print commands as they are executed with variables expanded"
-  , Option ['v']      ["verbose"]     (NoArg setDashV)      "print commands as they are read from .do files"
-  , Option ['V','?']  ["version"]     (NoArg printVersion)                  "print the version number"
-  , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)  "keep building even if some targets fail"
-  , Option ['s']      ["shuffle"]     (NoArg setShuffle)    "randomize the build order to find dependency bugs"
+  [ Option ['j']      ["jobs"]        (ReqArg setOptJobs "numJobs")  "maximum number of parallel jobs to build at once"
+  , Option ['h','H']  ["help"]        (NoArg setHelp)                "show usage details"
+  , Option ['x']      ["xtrace"]      (NoArg setDashX)               "print commands as they are executed with variables expanded"
+  , Option ['v']      ["verbose"]     (NoArg setDashV)               "print commands as they are read from .do files"
+  , Option ['V','?']  ["version"]     (NoArg printVersion)           "print the version number"
+  , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)           "keep building even if some targets fail"
+  , Option ['s']      ["shuffle"]     (NoArg setShuffle)             "randomize the build order to find dependency bugs"
+  , Option ['n']      ["no-color"]    (NoArg setNoColor)             "print plain text, disable ANSI terminal color output"
   ]
 
 -- Helper functions for setting the options:
 setOptJobs :: String -> Options -> IO Options
-setOptJobs cmdLineArg opt = return opt { jobs = read $ cmdLineArg :: Int }
+setOptJobs cmdLineArg opt = return opt { jobs = read cmdLineArg :: Int }
 
 setHelp :: Options -> IO Options
 setHelp opt = return opt { help = True }
@@ -74,8 +77,11 @@ setKeepGoing opt = return opt { keepGoing = True }
 setShuffle :: Options -> IO Options
 setShuffle opt = return opt { shuffle = True }
 
+setNoColor :: Options -> IO Options
+setNoColor opt = return opt { noColor = True }
+
 -- Print the program version and license information:
-printVersion :: Options -> IO (Options)
+printVersion :: Options -> IO Options
 printVersion _ = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
                     exitSuccess
 
@@ -95,7 +101,7 @@ getOptions = do
                      return (o',n)
     (_,_,errs) -> do programName <- getProgName
                      printHelp programName options errs 
-  where setOptions o = foldl (>>=) (return defaultOptions) o
+  where setOptions = foldl (>>=) (return defaultOptions)
 
 -- Main function:
 main :: IO ()
@@ -111,12 +117,14 @@ main = do
                 dashV = dashV',
                 keepGoing = keepGoing',
                 jobs = jobs',
-                shuffle = shuffle'} = opts
+                shuffle = shuffle',
+                noColor = noColor'} = opts
 
   -- Show help or version information if asked:
-  when (help') (printHelp progName options [])
-  when (keepGoing') (setEnv "REDO_KEEP_GOING" "TRUE")
-  when (shuffle') (setEnv "REDO_SHUFFLE" "TRUE")
+  when help' (printHelp progName options [])
+  when keepGoing' (setEnv "REDO_KEEP_GOING" "TRUE")
+  when shuffle' (setEnv "REDO_SHUFFLE" "TRUE")
+  when noColor' (setEnv "REDO_NO_COLOR" "TRUE")
 
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
@@ -146,7 +154,6 @@ main = do
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: Int -> String -> [Target] -> IO()
 mainTop numJobs progName targets = do
-  -- TODO consider throwing signal to terminate misbehaving process ;)
   -- Setup cache and job server for first run:
   handle <- initializeJobServer numJobs
   initializeSession
@@ -172,8 +179,7 @@ mainTop numJobs progName targets = do
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()
-mainDo progName targets = do
-  --putWarningStrLn $ "running with targets: " ++ show targets
+mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory

@@ -1,24 +1,21 @@
 {-# LANGUAGE ScopedTypeVariables, FlexibleInstances #-}
 
-module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, runJob, waitOnJobs,
-                  JobServerHandle, tryWaitOnJobs) where
+module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, JobServerHandle,
+                  waitOnJob, runJob, tryWaitOnJob) where
 
-import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, tryTakeMVar, MVar, threadDelay, forkOS, forkIO)
 import Control.Exception.Base (assert)
 import Control.Exception (catch, SomeException(..))
 import Foreign.C.Types (CInt)
 import System.Environment (getEnv, setEnv)
+import System.Exit (ExitCode(..))
 import System.Posix.IO (createPipe, fdWrite, fdRead, FdOption(..), setFdOption, closeFd)
-import System.Posix.Types (Fd(..), ByteCount)
-import System.Posix.Process (forkProcess, getProcessStatus)
-import System.IO (hPutStrLn, stderr)
+import System.Posix.Types (Fd(..), ByteCount, ProcessID)
+import System.Posix.Process (forkProcess, getProcessStatus, ProcessStatus(..))
 
-import PrettyPrint
-
-newtype JobServerHandle a = JobServerHandle { unJobServerHandle :: (Fd, Fd, [MVar a]) }
+newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd) }
 newtype Token = Token { unToken :: String } deriving (Eq, Show)
 
-initializeJobServer :: Int -> IO (JobServerHandle a)
+initializeJobServer :: Int -> IO JobServerHandle
 initializeJobServer n = do 
   -- Create the pipe: 
   (readEnd, writeEnd) <- createPipe
@@ -35,112 +32,85 @@ initializeJobServer n = do
 
   -- Set an environment variable to store the handle for 
   -- other programs that might use this server:
+  -- TODO: make compatible with make? Or give up on that?
   setEnv "MAKEFLAGS" $ show readEnd ++ ", " ++ show writeEnd
   
   -- Return the read and write ends of the pipe:
-  return $ JobServerHandle (readEnd, writeEnd, [])
-  where tokens = concat $ map show $ take tokensToWrite [(1::Integer)..]
+  return $ JobServerHandle (readEnd, writeEnd)
+  where tokens = concatMap show $ take tokensToWrite [(1::Integer)..]
         tokensToWrite = n-1
 
-getJobServer :: IO (JobServerHandle a)
+getJobServer :: IO JobServerHandle
 getJobServer = do flags <- getEnv "MAKEFLAGS"
                   let handle = handle' flags
-                  return $ JobServerHandle $ (Fd $ handle !! 0, Fd $ handle !! 1, [])
+                  return $ JobServerHandle (Fd $ head handle, Fd $ handle !! 1)
   where handle' flags = map convert (splitBy ',' flags)
         convert a = read a :: CInt
 
-clearJobServer :: JobServerHandle a -> IO ()
+clearJobServer :: JobServerHandle -> IO ()
 clearJobServer handle = safeCloseFd w >> safeCloseFd r
   where safeCloseFd fd = catch (closeFd fd) (\(_ :: SomeException) -> return ()) 
-        (r, w, _) = unJobServerHandle handle
+        (r, w) = unJobServerHandle handle
 
 -- Given a list of IO () jobs, run them when a space on the job server is
 -- available.
-runJobs :: JobServerHandle a -> [IO a] -> IO [a]
+runJobs :: JobServerHandle -> [IO ExitCode] -> IO [ExitCode]
 runJobs _ [] = return []
 runJobs _ [j] = do ret <- j 
                    return [ret]
 runJobs handle (j:jobs) = maybe runJob' forkJob =<< getToken r
   where 
-    (r, w, _) = unJobServerHandle handle
+    (r, w) = unJobServerHandle handle
     forkJob token = do
-      --hPutStrLn stderr $ "read " ++ unToken token ++ " from pipe. "
-
       -- Fork new thread to run job:
-      --mToken <- newEmptyMVar
-      mReturn <- newEmptyMVar
-      --hPutStrLn stderr $ "fork process " ++ unToken token
-      -- consider using fork finally
-      -- consider putting thread id in handle so that it can be killed on error
-      processId <- forkProcess $ runForkedJob token mReturn w j
-      --putMVar mToken token
-
+      processId <- forkProcess $ runForkedJob token w j
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
-
-      -- Wait on my forked job:
-      --ret1 <- takeMVar mReturn
-      processStatus <- getProcessStatus True False processId
-
-      --return $ ret1:rets 
-      return $ rets 
-    runJob' = do --putWarningStrLn $ "running with: 0" 
-                 ret1 <- j
+      maybe (return $ ExitFailure 1 : rets) (returnExitCode rets) 
+        =<< getProcessStatus True False processId
+    runJob' = do ret1 <- j
                  rets <- runJobs handle jobs
                  return $ ret1:rets 
+    returnExitCode rets processStatus = return $ code:rets
+      where code = getExitCode processStatus
 
-runJob :: JobServerHandle a -> IO a -> IO (JobServerHandle a)
+runJob :: JobServerHandle -> IO ExitCode -> IO (Either ProcessID ExitCode)
 runJob handle j = maybe runJob' forkJob =<< getToken r
   where 
-    (r, w, mReturns) = unJobServerHandle handle
+    (r, w) = unJobServerHandle handle
     forkJob token = do
-      --hPutStrLn stderr $ "read " ++ unToken token ++ " from pipe. "
-
-      -- Fork new thread to run job:
-      --mToken <- newEmptyMVar
-      mReturn <- newEmptyMVar
-      --hPutStrLn stderr $ "fork process " ++ unToken token
-      -- consider using fork finally
-      _ <- forkProcess $ runForkedJob token mReturn w j
-      --hPutStrLn stderr $ "forked " ++ show id_
-      --putMVar mToken token
-      return $ JobServerHandle (r, w, mReturns++[mReturn])
+      processStatus <- forkProcess $ runForkedJob token w j
+      return $ Left processStatus
     runJob' = do ret <- j
-                 mReturn <- newEmptyMVar
-                 putMVar mReturn ret
-                 return $ JobServerHandle (r, w, mReturns++[mReturn])
+                 return $ Right ret
 
-runForkedJob :: Token -> MVar (a) -> Fd -> IO a -> IO ()
-runForkedJob token mReturn w job = do 
-  --hPutStrLn stderr $ "-- starting job with token: " ++ unToken token
-  --putWarningStrLn $ "running with: " ++ unToken token
-  ret <- job
-  --hPutStrLn stderr $ "-- finished job with token: " ++ unToken token
-
-  -- Return the token:
+runForkedJob :: Token -> Fd -> IO ExitCode -> IO ()
+runForkedJob token w job = do 
+  _ <- job
   returnToken w token
-   
-  -- Signal that I have finished:
-  putMVar mReturn ret
   return ()
 
--- Wait on job and return a list of the job's return once all job's have finished:
-waitOnJobs :: JobServerHandle a -> IO [a]
-waitOnJobs handle = mapM takeMVar mReturns
-  where (_, _, mReturns) = unJobServerHandle handle
+-- Wait on job to finish, and return the exit code when it does:
+waitOnJob :: ProcessID -> IO ExitCode
+waitOnJob pid = fmap (maybe (ExitFailure 1) getExitCode) (getProcessStatus True False pid)
 
--- Collect the return values of any jobs who have finished. Returns Nothing for
--- outstanding jobs:
-tryWaitOnJobs :: JobServerHandle a -> IO [Maybe a]
-tryWaitOnJobs handle = mapM tryTakeMVar mReturns
-  where (_, _, mReturns) = unJobServerHandle handle
+-- Return a job's exit code if it's finished, otherwise return
+-- nothing.
+tryWaitOnJob :: ProcessID -> IO (Maybe ExitCode)
+tryWaitOnJob pid = fmap (fmap getExitCode) (getProcessStatus False False pid)
+
+-- Get the exit code from a process status:
+getExitCode :: ProcessStatus -> ExitCode
+getExitCode (Exited code) = code
+getExitCode (Terminated _ _) = ExitFailure 1
+getExitCode (Stopped _) = ExitFailure 1
 
 -- Get a token if one is available, otherwise return Nothing:
 getToken :: Fd -> IO (Maybe Token)
-getToken fd = catch (readPipe) (\(_ :: SomeException) -> return Nothing) 
+getToken fd = catch readPipe (\(_ :: SomeException) -> return Nothing) 
   where readPipe = do (token, byteCount) <- fdRead fd 1
                       assert_ $ countToInt byteCount == 1
-                      return $ Just $ Token $ token
+                      return $ Just $ Token token
 
 -- Return a token to the pipe:
 returnToken :: Fd -> Token -> IO ()
@@ -153,44 +123,10 @@ assert_ c = assert c (return ())
 
 -- Conversion helper for ByteCount type:
 countToInt :: ByteCount -> Int
-countToInt a = fromIntegral a
+countToInt = fromIntegral
 
 splitBy :: Char -> String -> [String]
 splitBy delimiter = foldr f [[]] 
   where f c l@(x:xs) | c == delimiter = []:l
                      | otherwise = (c:x):xs
         f _ [] = []
-
--- Main function:
-main :: IO ()
-main = do handle <- initializeJobServer 4
-          returns <- runJobs handle jobs
-          hPutStrLn stderr $ "returns: " ++ show returns
-          hPutStrLn stderr "--------------------------------------------------------------------"
-          handle2 <- getJobServer
-          handle3 <- mapM' runJob handle2 jobs
-          returns2 <- waitOnJobs handle3
-          hPutStrLn stderr $ "returns: " ++ show returns2
-          clearJobServer handle
-  where jobs = [exampleLongJob "A", exampleJob "B", exampleLongJob "C", 
-                exampleJob "D", exampleJob "E", exampleJob "F",
-                exampleJob "G", exampleJob "H", exampleJob "I",
-                exampleJob "J", exampleJob "K", exampleJob "L"]
-        mapM' :: Monad m => (a -> m b -> m a) -> a -> [m b] -> m a
-        mapM' _ a [] = return a
-        mapM' f a (x:xs) = do newA <- f a x
-                              mapM' f newA xs
-
-exampleJob :: String -> IO (Int)
-exampleJob n = do hPutStrLn stderr $ ".... Running job: " ++ n
-                  threadDelay 1000000
-                  hPutStrLn stderr $ ".... Finishing job: " ++ n
-                  return 1
-
-exampleLongJob :: String -> IO (Int)
-exampleLongJob n = do hPutStrLn stderr $ ".... Running job: " ++ n
-                      threadDelay 10000000
-                      hPutStrLn stderr $ ".... Finishing job: " ++ n
-                      return 2
-
-

@@ -9,22 +9,22 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 import Control.Applicative ((<$>))
 import Control.Monad (unless)
 import Control.Exception (catch, SomeException(..))
+import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
 import Data.Bool (bool)
-import System.Directory (removeDirectoryRecursive, doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory)
+import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory)
 import System.Environment (getEnvironment, lookupEnv, getEnv)
 import System.Exit (ExitCode(..))
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
-import Control.Concurrent (myThreadId)
+import System.Posix.Types (ProcessID)
 
 -- Local imports:
 import Types
 import Database 
-import SafeFileLock
 import JobServer
 import UpToDate
 import PrettyPrint
@@ -52,7 +52,7 @@ storeDependencies storeAction dependencies = do
   canonicalizedDeps <- mapM (canonicalize parentRedoPath) dependencies
   mapM_ (storeAction key) canonicalizedDeps
   where canonicalize path dep = do cpath <- canonicalizePath' $ path </> unTarget dep
-                                   return $ Target $ cpath
+                                   return $ Target cpath
 
 -- Returns true if program was invoked from within a .do file, false if run from commandline
 isRunFromDoFile :: IO Bool
@@ -95,7 +95,7 @@ noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build tar
 
 -- Just run the do file for a 'redo' command:
 redo :: [Target] -> IO ExitCode
-redo = buildTargets' redo'
+redo = buildTargets redo'
   where redo' target = do 
           key <- getKey target
           source <- isTargetSource key target
@@ -107,7 +107,7 @@ redo = buildTargets' redo'
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [Target] -> IO ExitCode
-redoIfChange = buildTargets' redoIfChange'
+redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
       key <- getKey target
@@ -122,8 +122,6 @@ redoIfChange = buildTargets' redoIfChange'
           modified <- isTargetModified key currentStamp
           if modified then targetModifiedWarning target
           else do
-            threadId <- myThreadId
-            --putStatusStrLn $ show threadId ++ " redo-ifchange " ++ unTarget target
             upToDate' <- upToDate key target
             -- Try to run redo if out of date, if it fails, print an error message:
             unless' upToDate' (maybe (missingDo key target) (runDoFile key target currentStamp) =<< findDoFile target)
@@ -137,154 +135,106 @@ redoIfChange = buildTargets' redoIfChange'
                                 return ExitSuccess
                               else noDoFileError target
 
-buildTargets' :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
-buildTargets' buildFunc targets = do
-
-  -- Construct the list of jobs:
-  absTargets <- mapM makeAbs targets
-  let jobs = map tryBuild absTargets
-
-  -- Run the jobs:
-  handle <- getJobServer
-  results <- runJobs handle jobs 
-
-  -- TODO exit early here
-  --let (remainingTargets, exitCodes) = unzip results
-
-  -- Build the remaining unbuilt targets
-  exitCodes <- mapM waitBuild results
-
-  -- Return the exit code:
-  returnExitCode exitCodes
-  where 
-    makeAbs target = Target <$> canonicalizePath' (unTarget target)
-    -- Try to lock and build a target. If we cannot retrieve a lock, then return the target name, otherwise
-    -- return ""
-    tryBuild :: Target -> IO (Target, FileLockHandle, ExitCode)
-    tryBuild target = do 
-      lockHandle <- createFileLock target
-      maybe (return (target, lockHandle, ExitSuccess)) (runBuild target lockHandle) =<< tryFileLock lockHandle
-      where runBuild :: Target -> FileLockHandle -> FileLock -> IO (Target, FileLockHandle, ExitCode)
-            runBuild target lockHandle lock = do threadId <- myThreadId
-                                                 --putRedoWarning target $ "grabbed lock"
-                                                 exitCode <- buildFunc target 
-                                                 releaseFileLock lockHandle lock
-                                                 --putRedoWarning target $ "release lock"
-                                                 return (Target "", undefined, exitCode)
-    
-    -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (Target, FileLockHandle, ExitCode) -> IO (ExitCode)
-    waitBuild (Target "", _, exitCode) = return exitCode
-    waitBuild (target, lockHandle, _) = do 
-      --putRedoUnformatted target $ "waiting"
-      lock <- waitFileLock lockHandle
-      --putRedoStatus target $ "grabbed lock"
-      --buildHandle <- runJob handle $ buildFunc target
-      exitCode <- buildFunc target
-      --putRedoStatus target $ "released lock"
-      releaseFileLock lockHandle lock
-      --putStatusStrLn $ show threadId ++ " released lock for " ++ unTarget target
-      return exitCode 
-
-    -- Helper function for returning a failing code if it exists, otherwise return success
-    returnExitCode [] = return $ ExitSuccess
-    returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
-
-
 -- Lock a file and run a function that takes that file as input.
 -- If the file is already locked, skip running the function on that
 -- file initially, and continue to trying to run the function on the next
 -- file in the list. In a second pass, wait as long as it takes to lock 
 -- on the files that were initially skipped before running the function.
--- This function allows us to build all the targets that don't havabsTarget
+-- This function allows us to build all the targets that don't have
 -- lock contention first, buying us a little time before we wait to build
 -- the files under lock contention
--- buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
--- buildTargets buildFunc targets = do
---   handle <- getJobServer
---   keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
---   let keepGoing' = fromMaybe "" keepGoing''
---   let keepGoing = not $ null keepGoing'
---   -- Try to lock file and build it, accumulate list of unbuilt files
---   remainingTargets <- mapM (tryBuild handle) targets 
--- 
---   -- Wait till all targets have completed:
---   let (_, _, resultHandles) = unzip3 remainingTargets
---   exitCodes <- flatten <$> mapM waitOnJobs resultHandles
--- 
---   -- Wait to acquire the lock, and build the remaining unbuilt files
---   _ <- mapM waitBuild remainingTargets          
---   -- Make sure we wait on all jobs and gather the exit codes before returning:
---   --exitCodes <- flatten <$> mapM waitOnJobs resultHandles
---   returnExitCode exitCodes
---   where
---     -- Try to build the target if the do file can be found and there is no lock contention:
---     tryBuild :: JobServerHandle ExitCode -> Target -> IO (Target, LockFile, JobServerHandle ExitCode)
---     tryBuild handle target = do 
---       absTarget <- Target <$> canonicalizePath' (unTarget target)
---       threadId <- myThreadId
---       putWarningStrLn $ show threadId ++ " grabbing lock for " ++ unTarget absTarget
---       tryBuild' absTarget
---       where
---         tryBuild' :: Target -> IO (Target, LockFile, JobServerHandle ExitCode)
---         tryBuild' absTarget = do lckFileName <- createLockFile absTarget
---                                  --putWarningStrLn $ " lock for " ++ unTarget absTarget ++ " is " ++ lockFileToFilePath lckFileName
---                                  maybe (return (absTarget , lckFileName, handle)) (runBuild absTarget) 
---                                    =<< tryLockFile (lockFileToFilePath lckFileName) Exclusive
---         runBuild :: Target -> FileLock -> IO (Target, LockFile, JobServerHandle ExitCode)
---         runBuild absTarget lock = do buildHandle <- runJob handle $ buildFunc absTarget 
---                                      threadId <- myThreadId
---                                      putWarningStrLn $ show threadId ++ " grabbed lock for " ++ unTarget absTarget
---                                      unlockFile lock
---                                      putWarningStrLn $ show threadId ++ " releasing lock for " ++ unTarget absTarget 
---                                      return (Target "", LockFile "", buildHandle)
---     -- Wait to build the target if the do file is given, regardless of lock contention:
---     waitBuild :: (Target, LockFile, JobServerHandle ExitCode) -> IO (JobServerHandle ExitCode)
---     waitBuild (Target "", LockFile "", handle) = return handle
---     waitBuild (target, lckFileName, handle) = do 
---                                                  threadId <- myThreadId
---                                                  putStatusStrLn $ show threadId ++ " grabbing lock for " ++ unTarget target
---                                                  lock <- lockFile (lockFileToFilePath lckFileName) Exclusive 
---                                                  --buildHandle <- runJob handle $ buildFunc target
---                                                  buildFunc target
---                                                  --putStatusStrLn $ show threadId ++ " releasing lock for " ++ unTarget target
---                                                  unlockFile lock
---                                                  putStatusStrLn $ show threadId ++ " released lock for " ++ unTarget target
---                                                  return handle
--- 
---     -- Helper function for returning a failing code if it exists, otherwise return success
---     returnExitCode [] = return $ ExitSuccess
---     returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
--- 
---     -- Special mapM which exits early if an operation fails
---     -- TODO remove
---     mapM' :: Bool -> (Target -> IO (Target, LockFile, ExitCode)) -> [Target] -> IO [(Target, LockFile, ExitCode)]
---     mapM' keepGoing f = mapM'' ExitSuccess
---       where 
---         mapM'' exitCode [] = return [(Target "", LockFile "", exitCode)]
---         mapM'' exitCode (x:xs) = do 
---           (a, b, newExitCode) <- f x 
---           if newExitCode /= ExitSuccess then 
---             if keepGoing then runNext newExitCode (a, b, newExitCode)
---             else return [(a, b, newExitCode)]
---           else runNext exitCode (a, b, newExitCode)
---           where runNext code current = do next <- mapM'' code xs
---                                           return $ current : next
---     -- Special mapM_ which exits early if an operation fails
---     -- TODO remove
---     mapM_' :: Bool -> ((Target, LockFile, ExitCode) -> IO ExitCode) -> [(Target, LockFile, ExitCode)] -> IO ExitCode
---     mapM_' keepGoing f = mapM_'' ExitSuccess
---       where 
---         mapM_'' exitCode [] = return exitCode
---         mapM_'' exitCode (x:xs) = do 
---           newExitCode <- f x 
---           if newExitCode /= ExitSuccess then 
---             if keepGoing then mapM_'' newExitCode xs
---             else return newExitCode
---           else mapM_'' exitCode xs
--- 
---     flatten :: [[a]] -> [a]         
---     flatten xs = (\z n -> foldr (\x y -> foldr z y x) n xs) (:) []
+buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
+buildTargets buildFunc targets = do
+  handle <- getJobServer
+  keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
+  let keepGoing' = fromMaybe "" keepGoing''
+  let keepGoing = not $ null keepGoing'
+
+  -- Try to lock file and build all targets and accumulate list of unbuilt targets:
+  results <- mapM1 keepGoing (tryBuild handle) targets 
+  let (remainingTargets, processStatus) = unzip results
+  let exitCodes = rights processStatus
+  let processIDs = lefts processStatus
+
+  -- Exit immediately if something failed:
+  maybe (do
+    -- Wait on all jobs to complete:
+    remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
+    -- Exit immediately if something failed:
+    maybe (do
+      -- Wait to acquire the lock, and build the remaining unbuilt files
+      finalExitCodes <- mapM2 keepGoing waitBuild remainingTargets
+      -- Make sure we wait on all jobs and gather the exit codes before returning:
+      returnExitCode finalExitCodes
+      )
+      return (getFailingExitCode remainingExitCodes)
+    )
+    return (getFailingExitCode exitCodes)
+  where
+    -- Try to build the target if the do file can be found and there is no lock contention:
+    tryBuild :: JobServerHandle -> Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
+    tryBuild handle target = do 
+      absTarget <- Target <$> canonicalizePath' (unTarget target)
+      tryBuild' absTarget
+      where
+        tryBuild' :: Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
+        tryBuild' absTarget = do lckFileName <- createLockFile absTarget
+                                 maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild absTarget) 
+                                   =<< tryLockFile lckFileName Exclusive
+        runBuild :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
+        runBuild absTarget lock = do processReturn <- runJob handle $ buildFunc absTarget 
+                                     unlockFile lock
+                                     return ((Target "", ""), processReturn)
+    -- Wait to build the target if the do file is given, regardless of lock contention:
+    waitBuild :: (Target, FilePath) -> IO ExitCode
+    waitBuild (Target "", "") = return ExitSuccess
+    waitBuild (target, lckFileName) = do -- TODO consider giving up token here
+                                         lock <- lockFile lckFileName Exclusive 
+                                         code <- buildFunc target
+                                         unlockFile lock
+                                         return code
+
+    -- Helper function for returning a failing code if it exists, otherwise return success
+    returnExitCode :: [ExitCode] -> IO ExitCode
+    returnExitCode [] = return ExitSuccess
+    returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
+
+    -- Helper function which returns the failing exit code if it exists, otherwise nothing
+    getFailingExitCode :: [ExitCode] -> Maybe ExitCode 
+    getFailingExitCode [] = Nothing
+    getFailingExitCode (code:codes) = if code /= ExitSuccess then Just code else getFailingExitCode codes
+
+    -- Special mapMs which exits early if it detects that an operation fails:
+    mapM1 :: Bool -> (Target -> IO ((Target, FilePath), Either ProcessID ExitCode)) 
+                  -> [Target] -> IO [((Target, FilePath), Either ProcessID ExitCode)]
+    mapM1 keepGoing f = mapM''
+      where 
+        mapM'' [] = return [((Target "", ""), Right ExitSuccess)]
+        mapM'' (x:xs) = do 
+          (a, newExitCode) <- f x 
+          if isRight newExitCode && fromRight newExitCode /= ExitSuccess then 
+            if keepGoing then runNext (a, newExitCode)
+            else return [(a, newExitCode)]
+          else runNext (a, newExitCode)
+          where runNext current = do next <- mapM'' xs
+                                     return $ current : next
+                fromRight :: Either a b -> b
+                fromRight (Right r) = r
+                fromRight (Left _) = undefined
+
+    -- Special mapMs which exits early if it detects that an operation fails:
+    mapM2 :: Bool -> (a -> IO ExitCode) -> [a] -> IO [ExitCode]
+    mapM2 keepGoing f = mapM''
+      where 
+        mapM'' [] = return [ExitSuccess]
+        mapM'' (x:xs) = do 
+          newExitCode <- f x 
+          if newExitCode /= ExitSuccess then 
+            if keepGoing then runNext newExitCode
+            else return [newExitCode]
+          else runNext newExitCode
+          where runNext current = do next <- mapM'' xs
+                                     return $ current : next
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
@@ -297,9 +247,11 @@ runDoFile key target currentTimeStamp doFile = do
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
+  noColor' <- lookupEnv "REDO_NO_COLOR"                -- Disable color printed redo status
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
+  let noColor = fromMaybe "" noColor'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
   let sessionNumber = fromMaybe "" sessionNumber'
@@ -307,8 +259,6 @@ runDoFile key target currentTimeStamp doFile = do
   cmd <- shellCmd shellArgs doFile targetRel2Do
   targetIsDirectory <- doesDirectoryExist $ unTarget target
 
-  threadId <- myThreadId
-                                                 
   -- Print what we are currently "redoing"
   putRedoInfo target
   unless (null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
@@ -326,6 +276,7 @@ runDoFile key target currentTimeStamp doFile = do
                       $ insert "REDO_SESSION" sessionNumber
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
+                      $ insert "REDO_NO_COLOR" noColor
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_TARGET" (unTarget target)
@@ -425,7 +376,7 @@ runDoFile key target currentTimeStamp doFile = do
 shellCmd :: String -> DoFile -> Target -> IO String
 shellCmd shellArgs doFile target = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote $ tmpStdoutFile']
+  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote tmpStdoutFile']
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 

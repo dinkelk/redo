@@ -5,12 +5,10 @@ module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursi
                     safeRemoveGlob, removeDotDirs, escapeFilePath, unescapeFilePath) where
 
 import Control.Applicative ((<$>))
-import Control.Exception (catch, SomeException(..), catchJust)
-import Control.Monad (guard)
+import Control.Exception (catch, SomeException(..))
 import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, pathSeparator)
 import System.FilePath.Glob (globDir1, compile)
 import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
-import System.IO.Error (isDoesNotExistError)
 
 ---------------------------------------------------------------------
 -- # Defines
@@ -31,10 +29,8 @@ escapeFilePath path = concatMap repl path'
 
 -- Reverses escapeFilePath
 unescapeFilePath :: FilePath -> FilePath
-unescapeFilePath name = unEscape name
-  where 
-    unEscape [] = []
-    unEscape string = first : unEscape rest
+unescapeFilePath "" = ""
+unescapeFilePath string = first : unescapeFilePath rest
       where
         (first, rest) = repl string
         repl [] = ('\0',"")
