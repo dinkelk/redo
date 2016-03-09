@@ -51,10 +51,10 @@ createFileLock target = do
 
 waitFileLock :: FileLockHandle -> IO FileLock
 waitFileLock handle = do
-  id_ <- myThreadId
-  putStatusStrLn $ "waiting on mvar " ++ show id_
+  --id_ <- myThreadId
+  --putStatusStrLn $ "waiting on mvar " ++ show id_
   path <- takeMVar mutex
-  putStatusStrLn $ "waiting on: " ++ path
+  --putStatusStrLn $ "waiting on: " ++ path
   assert_ $ not $ null path
   lockFile path Exclusive 
   where mutex = unFileLockHandle handle
@@ -73,7 +73,7 @@ releaseFileLock :: FileLockHandle -> FileLock -> IO ()
 releaseFileLock handle lock = do
   id_ <- myThreadId
   unlockFile lock
-  putStatusStrLn $ "releaseing " ++ show id_
+  --putStatusStrLn $ "releaseing " ++ show id_
   putMVar mutex ""
   where mutex = unFileLockHandle handle
 

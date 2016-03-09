@@ -123,7 +123,7 @@ redoIfChange = buildTargets' redoIfChange'
           if modified then targetModifiedWarning target
           else do
             threadId <- myThreadId
-            putStatusStrLn $ show threadId ++ " redo-ifchange " ++ unTarget target
+            --putStatusStrLn $ show threadId ++ " redo-ifchange " ++ unTarget target
             upToDate' <- upToDate key target
             -- Try to run redo if out of date, if it fails, print an error message:
             unless' upToDate' (maybe (missingDo key target) (runDoFile key target currentStamp) =<< findDoFile target)
@@ -169,16 +169,16 @@ buildTargets' buildFunc targets = do
                                                  --putRedoWarning target $ "grabbed lock"
                                                  exitCode <- buildFunc target 
                                                  releaseFileLock lockHandle lock
-                                                 putRedoWarning target $ "release lock"
+                                                 --putRedoWarning target $ "release lock"
                                                  return (Target "", undefined, exitCode)
     
     -- Wait to build the target if the do file is given, regardless of lock contention:
     waitBuild :: (Target, FileLockHandle, ExitCode) -> IO (ExitCode)
     waitBuild (Target "", _, exitCode) = return exitCode
     waitBuild (target, lockHandle, _) = do 
-      putRedoUnformatted target $ "waiting"
+      --putRedoUnformatted target $ "waiting"
       lock <- waitFileLock lockHandle
-      putRedoStatus target $ "grabbed lock"
+      --putRedoStatus target $ "grabbed lock"
       --buildHandle <- runJob handle $ buildFunc target
       exitCode <- buildFunc target
       --putRedoStatus target $ "released lock"
@@ -463,8 +463,7 @@ tmpStdoutFile dir target = dir </> takeFileName(unTarget target) ++ ".redo2.temp
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()
-safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> removeDir)
-  where removeDir = catch (removeDirectoryRecursive file) (\(_ :: SomeException) -> return ())
+safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> safeRemoveDirectoryRecursive file)
 
 -- Get the file size of a file
 fileSize :: FilePath -> IO Integer

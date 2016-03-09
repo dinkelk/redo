@@ -10,6 +10,7 @@ import Foreign.C.Types (CInt)
 import System.Environment (getEnv, setEnv)
 import System.Posix.IO (createPipe, fdWrite, fdRead, FdOption(..), setFdOption, closeFd)
 import System.Posix.Types (Fd(..), ByteCount)
+import System.Posix.Process (forkProcess, getProcessStatus)
 import System.IO (hPutStrLn, stderr)
 
 import PrettyPrint
@@ -71,15 +72,18 @@ runJobs handle (j:jobs) = maybe runJob' forkJob =<< getToken r
       --hPutStrLn stderr $ "fork process " ++ unToken token
       -- consider using fork finally
       -- consider putting thread id in handle so that it can be killed on error
-      _ <- forkIO $ runForkedJob token mReturn w j
+      processId <- forkProcess $ runForkedJob token mReturn w j
       --putMVar mToken token
 
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
 
       -- Wait on my forked job:
-      ret1 <- takeMVar mReturn
-      return $ ret1:rets 
+      --ret1 <- takeMVar mReturn
+      processStatus <- getProcessStatus True False processId
+
+      --return $ ret1:rets 
+      return $ rets 
     runJob' = do --putWarningStrLn $ "running with: 0" 
                  ret1 <- j
                  rets <- runJobs handle jobs
@@ -97,7 +101,7 @@ runJob handle j = maybe runJob' forkJob =<< getToken r
       mReturn <- newEmptyMVar
       --hPutStrLn stderr $ "fork process " ++ unToken token
       -- consider using fork finally
-      _ <- forkIO $ runForkedJob token mReturn w j
+      _ <- forkProcess $ runForkedJob token mReturn w j
       --hPutStrLn stderr $ "forked " ++ show id_
       --putMVar mToken token
       return $ JobServerHandle (r, w, mReturns++[mReturn])

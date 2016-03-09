@@ -87,7 +87,7 @@ safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile glo
 
 -- Remove a directory recursively without complaining if it exists or not:
 safeRemoveDirectoryRecursive :: FilePath -> IO ()
-safeRemoveDirectoryRecursive dir = catchJust (guard . isDoesNotExistError) (removeDirectoryRecursive dir) (\_ -> return())
+safeRemoveDirectoryRecursive dir = catch (removeDirectoryRecursive dir) (\(_ :: SomeException) -> return ())
 
 -- Create a directory recursively withoutc complaining if it already exists:
 safeCreateDirectoryRecursive :: FilePath -> IO ()
