@@ -9,7 +9,7 @@ cabal-dev
 .virtualenv
 .hpc
 .hsenv
-.cabal-sandbox/
+.cabal-sandbox*
 cabal.sandbox.config
 *.prof
 *.aux
@@ -20,3 +20,6 @@ cabal.sandbox.config
 *.swp
 bin
 prof
+todo
+src/ghci.sh
+cabal.config
