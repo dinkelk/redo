@@ -21,16 +21,14 @@ debug a _ = a
 -- Top upToDate which should be called by redo-ifchange. Return true if a file is clean and does
 -- not need to be built. Return false if a file is dirty and needs to be rebuilt.
 -- Note: target must be the absolute canonicalized path to the target
-upToDate :: Key -> Target -> IO Bool
+upToDate :: Key -> TempKey -> Target -> IO Bool
 upToDate = upToDate'' 0
 
 upToDate' :: Int -> Target -> IO Bool
-upToDate' level target = do
-  key <- getKey target
-  upToDate'' level key target
+upToDate' level target = upToDate'' level (getKey target) (getTempKey target) target
 
-upToDate'' :: Int -> Key -> Target -> IO Bool
-upToDate'' level key target = do
+upToDate'' :: Int -> Key -> TempKey -> Target -> IO Bool
+upToDate'' level key tempKey target = do
   return () `debug'` "=checking"
   databaseExists <- doesDatabaseExist key
   -- If there is no database for this target and it doesn't exist than it has never been built, or it is
@@ -41,11 +39,11 @@ upToDate'' level key target = do
     -- If neither a target or a phony target exists, then the target is obviously not up to date
     if isNothing existingTarget then return False `debug'` "-not built"
     else do
-      clean <- isClean key  
+      clean <- isClean tempKey  
       -- If we have already checked off this target as up to date, there is no need to check again
       if clean then return True `debug'` "+clean"
       else do
-        dirty <- isDirty key 
+        dirty <- isDirty tempKey 
         -- If we have already checked off this target as dirty, don't delay, return not up to date
         if dirty then return False `debug'` "-dirty"
         else do 
@@ -61,10 +59,10 @@ upToDate'' level key target = do
     debug' = debugUpToDate level target
     -- Helper function which returns true and marks the target as clean:
     returnTrue :: IO Bool
-    returnTrue = markClean key >> return True
+    returnTrue = markClean tempKey >> return True
     -- Helper function which returns false and marks the target as dirty:
     returnFalse :: IO Bool
-    returnFalse = markDirty key >> return False
+    returnFalse = markDirty tempKey >> return False
     
 upToDate''' :: Int -> Target -> Key -> IO Bool
 upToDate''' level target key = do

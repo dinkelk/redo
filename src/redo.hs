@@ -157,6 +157,7 @@ mainTop numJobs progName targets = do
   -- Setup cache and job server for first run:
   handle <- initializeJobServer numJobs
   initializeSession
+
   -- Perform the proper action based on the program name:
   case progName of 
     -- Run redo only on buildable files from the target's directory

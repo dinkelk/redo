@@ -58,12 +58,11 @@ runJobs :: JobServerHandle -> [IO ExitCode] -> IO [ExitCode]
 runJobs _ [] = return []
 runJobs _ [j] = do ret <- j 
                    return [ret]
-runJobs handle (j:jobs) = maybe runJob' forkJob =<< getToken r
+runJobs handle (j:jobs) = maybe runJob' forkJob =<< tryGetToken handle
   where 
-    (r, w) = unJobServerHandle handle
     forkJob token = do
       -- Fork new thread to run job:
-      processId <- forkProcess $ runForkedJob token w j
+      processId <- forkProcess $ runForkedJob handle token j
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
       maybe (return $ ExitFailure 1 : rets) (returnExitCode rets) 
@@ -75,19 +74,18 @@ runJobs handle (j:jobs) = maybe runJob' forkJob =<< getToken r
       where code = getExitCode processStatus
 
 runJob :: JobServerHandle -> IO ExitCode -> IO (Either ProcessID ExitCode)
-runJob handle j = maybe runJob' forkJob =<< getToken r
+runJob handle j = maybe runJob' forkJob =<< tryGetToken handle
   where 
-    (r, w) = unJobServerHandle handle
     forkJob token = do
-      processStatus <- forkProcess $ runForkedJob token w j
+      processStatus <- forkProcess $ runForkedJob handle token j
       return $ Left processStatus
     runJob' = do ret <- j
                  return $ Right ret
 
-runForkedJob :: Token -> Fd -> IO ExitCode -> IO ()
-runForkedJob token w job = do 
+runForkedJob :: JobServerHandle -> Token -> IO ExitCode -> IO ()
+runForkedJob handle token job = do 
   _ <- job
-  returnToken w token
+  returnToken handle token
   return ()
 
 -- Wait on job to finish, and return the exit code when it does:
@@ -106,16 +104,21 @@ getExitCode (Terminated _ _) = ExitFailure 1
 getExitCode (Stopped _) = ExitFailure 1
 
 -- Get a token if one is available, otherwise return Nothing:
-getToken :: Fd -> IO (Maybe Token)
-getToken fd = catch readPipe (\(_ :: SomeException) -> return Nothing) 
-  where readPipe = do (token, byteCount) <- fdRead fd 1
+tryGetToken :: JobServerHandle -> IO (Maybe Token)
+tryGetToken handle = catch readPipe (\(_ :: SomeException) -> return Nothing) 
+  where readPipe = do (token, byteCount) <- fdRead r 1
                       assert_ $ countToInt byteCount == 1
                       return $ Just $ Token token
+        (r, _) = unJobServerHandle handle
+
+-- Wait for a token to become available and then return it:
+--getToken :: JobServerHandle -> IO ()
 
 -- Return a token to the pipe:
-returnToken :: Fd -> Token -> IO ()
-returnToken fd token = do byteCount <- fdWrite fd (unToken token)
-                          assert_ $ countToInt byteCount == 1
+returnToken :: JobServerHandle -> Token -> IO ()
+returnToken handle token = do byteCount <- fdWrite w (unToken token)
+                              assert_ $ countToInt byteCount == 1
+  where (_, w) = unJobServerHandle handle
 
 -- Convenient assert function:
 assert_ :: Monad m => Bool -> m ()

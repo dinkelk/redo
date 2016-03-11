@@ -1,3 +1,4 @@
 #!/bin/sh
 echo "Flushing redo cache..." >&2
-rm -rf $TMPDIR/redo/*
+rm -rf $TMPDIR/redo/*/cache/*
+rm -rf $TMPDIR/redo/*/locks/*

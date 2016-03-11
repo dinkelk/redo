@@ -97,20 +97,20 @@ noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build tar
 redo :: [Target] -> IO ExitCode
 redo = buildTargets redo'
   where redo' target = do 
-          key <- getKey target
           source <- isTargetSource key target
           currentStamp <- safeStampTarget target
           modified <- isTargetModified key currentStamp
           if source then targetSourceWarning target
           else if modified then targetModifiedWarning target
-          else maybe (noDoFileError target) (runDoFile key target currentStamp) =<< findDoFile target
+          else maybe (noDoFileError target) (runDoFile key tempKey target currentStamp) =<< findDoFile target
+          where key = getKey target
+                tempKey = getTempKey target
 
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [Target] -> IO ExitCode
 redoIfChange = buildTargets redoIfChange'
   where 
     redoIfChange' target = do 
-      key <- getKey target
       source <- isTargetSource key target
       runFromDo <- isRunFromDoFile
       case (source, runFromDo) of
@@ -122,9 +122,11 @@ redoIfChange = buildTargets redoIfChange'
           modified <- isTargetModified key currentStamp
           if modified then targetModifiedWarning target
           else do
-            upToDate' <- upToDate key target
+            upToDate' <- upToDate key tempKey target
             -- Try to run redo if out of date, if it fails, print an error message:
-            unless' upToDate' (maybe (missingDo key target) (runDoFile key target currentStamp) =<< findDoFile target)
+            unless' upToDate' (maybe (missingDo key target) (runDoFile key tempKey target currentStamp) =<< findDoFile target)
+      where key = getKey target
+            tempKey = getTempKey target
     -- Custom unless which return ExitSuccess if the condition is met
     unless' condition action = if condition then return ExitSuccess else action
     -- If a do file is not found then return an error message, unless the file exists,
@@ -188,11 +190,12 @@ buildTargets buildFunc targets = do
     -- Wait to build the target if the do file is given, regardless of lock contention:
     waitBuild :: (Target, FilePath) -> IO ExitCode
     waitBuild (Target "", "") = return ExitSuccess
-    waitBuild (target, lckFileName) = do -- TODO consider giving up token here
-                                         lock <- lockFile lckFileName Exclusive 
-                                         code <- buildFunc target
-                                         unlockFile lock
-                                         return code
+    waitBuild (target, lckFileName) = do 
+      --returnToken handle "0"
+      lock <- lockFile lckFileName Exclusive 
+      code <- buildFunc target
+      unlockFile lock
+      return code
 
     -- Helper function for returning a failing code if it exists, otherwise return success
     returnExitCode :: [ExitCode] -> IO ExitCode
@@ -238,8 +241,8 @@ buildTargets buildFunc targets = do
 
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
-runDoFile :: Key -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
-runDoFile key target currentTimeStamp doFile = do 
+runDoFile :: Key -> TempKey -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
+runDoFile key tempKey target currentTimeStamp doFile = do 
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -267,7 +270,7 @@ runDoFile key target currentTimeStamp doFile = do
   initializeTargetDatabase key doFile
 
   -- Create the dofile database:
-  doFileKey <- getKey $ Target $ unDoFile doFile
+  let doFileKey = getKey $ Target $ unDoFile doFile
   initializeSourceDatabase doFileKey $ Target $ unDoFile doFile
 
   -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
@@ -291,7 +294,7 @@ runDoFile key target currentTimeStamp doFile = do
                       maybe (nonZeroExitStr exitCode) stampBuiltTarget
                         =<< getBuiltTargetPath key target
                       bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
-    ExitFailure code -> do markDirty key -- we failed to build this target, so mark it dirty
+    ExitFailure code -> do markDirty tempKey -- we failed to build this target, so mark it dirty
                            removeTempFiles
                            nonZeroExitStr code
                            return $ ExitFailure code
@@ -304,7 +307,7 @@ runDoFile key target currentTimeStamp doFile = do
     stampBuiltTarget builtTarget = do
       stamp <- stampTarget builtTarget
       storeStamp key stamp
-      markClean key -- we just built this target, so we know it is clean now
+      markClean tempKey -- we just built this target, so we know it is clean now
       removeTempFiles
 
     -- Remove the temporary files created for a target:

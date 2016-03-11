@@ -2,9 +2,9 @@
 
 module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
                  getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, getLockFileDatabase,
-                 markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, 
+                 markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep,
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, Key(..), initializeSession, createLockFile) where
+                 isSource, getKey, getTempKey, TempKey, Key(..), initializeSession, createLockFile) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -26,6 +26,7 @@ import Types
 -- Type Definitions:
 ---------------------------------------------------------------------
 newtype Key = Key { keyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
+newtype TempKey = TempKey { tempKeyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
 
 ---------------------------------------------------------------------
 -- Functions initializing the meta directory for a target
@@ -34,6 +35,7 @@ initializeSession :: IO ()
 initializeSession = do
   sessionNumber <- randomRIO (0, 1000000::Int)
   setEnv "REDO_SESSION" (show sessionNumber)
+  createRedoTempDirectory
 
 -- Directory for storing and fetching data on dpendencies of redo targets.
 redoMetaDirectory :: IO FilePath
@@ -74,23 +76,32 @@ redoLockFileDirectory = do
   return $ root </> "locks"
 
 ---------------------------------------------------------------------
--- Functions clearing meta data information
+-- Functions creating and clearing the cache
 ---------------------------------------------------------------------
 -- Clear entire temporary directory:
 clearRedoTempDirectory :: IO ()
 clearRedoTempDirectory = safeRemoveDirectoryRecursive =<< redoTempDirectory
 
+-- Get the cache directory for a target:
+createRedoTempDirectory :: IO ()
+createRedoTempDirectory = do
+  safeCreateDirectoryRecursive =<< redoCacheDirectory
+  safeCreateDirectoryRecursive =<< redoLockFileDirectory
+
 ---------------------------------------------------------------------
 -- Functions getting database keys for targets
 ---------------------------------------------------------------------
 -- Get the database for a given target:
-getKey :: Target -> IO Key
-getKey target =
-  return $ Key $ pathify 3 $ hashString target
-  where 
-    pathify _ "" = ""
-    pathify n string = x </> pathify (n+n) xs
-      where (x,xs) = splitAt n string
+getKey :: Target -> Key
+getKey target = Key $ pathify 3 $ hashString target
+  where pathify _ "" = ""
+        pathify n string = x </> pathify (n+n) xs
+          where (x,xs) = splitAt n string
+
+-- The cache key is simpler, since it is temporary we don't
+-- need to make so many directories
+getTempKey :: Target -> TempKey
+getTempKey target = TempKey $ hashString target
 
 -- Create a hash string for a target:
 -- Note: For best results make sure you pass a canonicalized target
@@ -101,10 +112,10 @@ hashString target = hex $ BS.unpack $ hash $ BS.pack $ unTarget target
 -- Functions for setting up a database for a target:
 ---------------------------------------------------------------------
 -- Get the lock file directory for a target:
-getLockFileDatabase :: Key -> IO FilePath 
+getLockFileDatabase :: TempKey -> IO FilePath 
 getLockFileDatabase key = do
   lockFileDir <- redoLockFileDirectory
-  return $ lockFileDir </> keyToFilePath key
+  return $ lockFileDir </> tempKeyToFilePath key
 
 -- Get the database directory for a target's stamp:
 getStampDatabase :: Key -> IO FilePath
@@ -197,31 +208,30 @@ getStampEntry key = do
   return $ Entry $ stampDir </> "s"
 
 -- Get the cache directory for a target:
-getCacheDatabase :: Key -> IO FilePath
+getCacheDatabase :: TempKey -> IO FilePath
 getCacheDatabase key = do
   cacheDir <- redoCacheDirectory
-  return $ cacheDir </> keyToFilePath key
+  return $ cacheDir </> tempKeyToFilePath key
 
 -- Generic function for getting a cache entry with a certain name:
-getCacheEntry :: FilePath -> Key -> IO Entry
+getCacheEntry :: FilePath -> TempKey -> IO Entry
 getCacheEntry name key = do
   cacheDir <- getCacheDatabase key
-  return $ Entry $ cacheDir </> name
+  return $ Entry $ cacheDir ++ name
 
 -- Get the entry for marking a target clean:
-getCleanEntry :: Key -> IO Entry
+getCleanEntry :: TempKey -> IO Entry
 getCleanEntry = getCacheEntry "c"
 
 -- Get the entry for marking a target dirty:
-getDirtyEntry :: Key -> IO Entry
+getDirtyEntry :: TempKey -> IO Entry
 getDirtyEntry = getCacheEntry "d"
 
 createLockFile :: Target -> IO FilePath
 createLockFile target = do 
-   key <- getKey target
-   lockFileDir <- getLockFileDatabase key
-   safeCreateDirectoryRecursive lockFileDir 
-   return $ lockFileDir </> "l"
+  lockFileDir <- getLockFileDatabase key
+  return $ lockFileDir ++ "l"
+  where key = getTempKey target
 ---------------------------------------------------------------------
 -- Functions getting database values:
 ---------------------------------------------------------------------
@@ -255,10 +265,10 @@ getIfChangeDeps key = do
           (\(_ :: SomeException) -> return [])
         convert = Target . unescapeFilePath
 
-isClean :: Key -> IO Bool 
+isClean :: TempKey -> IO Bool 
 isClean key = doesEntryExist =<< getCleanEntry key
 
-isDirty :: Key -> IO Bool 
+isDirty :: TempKey -> IO Bool 
 isDirty key = doesEntryExist =<< getDirtyEntry key
 
 -- Retrieve the cached do file path inside meta dir
@@ -314,10 +324,10 @@ storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
   writeEntry phonyTargetDir (escapeFilePath ".")
 
-markClean :: Key -> IO ()
+markClean :: TempKey -> IO ()
 markClean key = createEntry =<< getCleanEntry key
 
-markDirty :: Key -> IO ()
+markDirty :: TempKey -> IO ()
 markDirty key = createEntry =<< getDirtyEntry key
 
 storeDoFile :: Key -> DoFile -> IO ()
