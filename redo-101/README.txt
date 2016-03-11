@@ -3,6 +3,25 @@
 ##################################################################
 ##################################################################
 
+What is redo?
+'redo target' finds a .do file for "target" and runs it
+
+What is redo-ifchange?
+'redo-ifchange target' check whether target needs to be rebuilt,
+if so, it finds a .do file for "target" and runs it. After running
+the do file, it updates the redo database.
+
+##################################################################
+##################################################################
+
+# Legend:
+
+run in the shell
+# inner workings of redo
+
+##################################################################
+##################################################################
+
 # redo - first run
 redo foo
    foo.do
