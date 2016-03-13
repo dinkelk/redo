@@ -165,7 +165,7 @@ buildTargets buildFunc targets = do
     -- Exit immediately if something failed:
     maybe (do
       -- Wait to acquire the lock, and build the remaining unbuilt files
-      finalExitCodes <- mapM2 keepGoing waitBuild remainingTargets
+      finalExitCodes <- mapM2 keepGoing (waitBuild handle) remainingTargets
       -- Make sure we wait on all jobs and gather the exit codes before returning:
       returnExitCode finalExitCodes
       )
@@ -188,14 +188,26 @@ buildTargets buildFunc targets = do
                                      unlockFile lock
                                      return ((Target "", ""), processReturn)
     -- Wait to build the target if the do file is given, regardless of lock contention:
-    waitBuild :: (Target, FilePath) -> IO ExitCode
-    waitBuild (Target "", "") = return ExitSuccess
-    waitBuild (target, lckFileName) = do 
-      --returnToken handle "0"
+    waitBuild :: JobServerHandle -> (Target, FilePath) -> IO ExitCode
+    waitBuild _ (Target "", "") = return ExitSuccess
+    waitBuild handle (target, lckFileName) = do 
+      -- Return my token before blocking on the filepath. This allows another redo process to be run
+      -- in the meantime.
+      returnToken handle (Token "0")
+      -- Wait to acquire a lock:
       lock <- lockFile lckFileName Exclusive 
-      code <- buildFunc target
+      -- Ok we have a lock, but we need to get a token first, so release the lock
+      -- and get a token. If we don't do it in this order we could encounter deadlock.
       unlockFile lock
-      return code
+      _ <- getToken handle
+      -- Try to grab the lock again. This should work most of the time, unless a process
+      -- beats us to the lock right after we released it. If we don't get a lock, try again.
+      -- If we get the lock, run the build function and return the exit code.
+      maybe (waitBuild handle (target, lckFileName)) 
+            (waitBuild') =<< tryLockFile lckFileName Exclusive
+      where waitBuild' lock = do code <- buildFunc target
+                                 unlockFile lock
+                                 return code
 
     -- Helper function for returning a failing code if it exists, otherwise return success
     returnExitCode :: [ExitCode] -> IO ExitCode

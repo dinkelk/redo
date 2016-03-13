@@ -155,8 +155,8 @@ main = do
 mainTop :: Int -> String -> [Target] -> IO()
 mainTop numJobs progName targets = do
   -- Setup cache and job server for first run:
-  handle <- initializeJobServer numJobs
   initializeSession
+  handle <- initializeJobServer numJobs
 
   -- Perform the proper action based on the program name:
   case progName of 

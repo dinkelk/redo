@@ -1,56 +1,80 @@
 {-# LANGUAGE ScopedTypeVariables, FlexibleInstances #-}
 
 module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, JobServerHandle,
-                  waitOnJob, runJob, tryWaitOnJob) where
+                  waitOnJob, runJob, tryWaitOnJob, returnToken, getToken, Token(..)) where
 
+import Control.Applicative ((<$>))
 import Control.Exception.Base (assert)
 import Control.Exception (catch, SomeException(..))
 import Foreign.C.Types (CInt)
 import System.Environment (getEnv, setEnv)
 import System.Exit (ExitCode(..))
-import System.Posix.IO (createPipe, fdWrite, fdRead, FdOption(..), setFdOption, closeFd)
+import System.Posix.IO (fdWrite, fdRead, closeFd)
 import System.Posix.Types (Fd(..), ByteCount, ProcessID)
 import System.Posix.Process (forkProcess, getProcessStatus, ProcessStatus(..))
+import System.Posix.Files (createNamedPipe, ownerReadMode, ownerWriteMode, namedPipeMode, unionFileModes)
+import System.Posix.IO (openFd, OpenMode(..), defaultFileFlags, OpenFileFlags(..))
 
-newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd) }
+import Database
+
+newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd, Fd) }
 newtype Token = Token { unToken :: String } deriving (Eq, Show)
 
 initializeJobServer :: Int -> IO JobServerHandle
 initializeJobServer n = do 
-  -- Create the pipe: 
-  (readEnd, writeEnd) <- createPipe
-  assert_ $ readEnd >= 0
-  assert_ $ writeEnd >= 0
-  assert_ $ readEnd /= writeEnd
+  -- Create a named pipe:
+  pipeName <- getJobServerPipe
+  createNamedPipe pipeName (unionFileModes (unionFileModes ownerReadMode ownerWriteMode) namedPipeMode)
 
-  -- Make the read end of the pipe non-blocking:
-  setFdOption readEnd NonBlockingRead True
+  -- Open read and write ends of named pipe:
+  -- Note: the order in which this is done is important, otherwise this function will
+  -- block forever. 
+  -- See: http://stackoverflow.com/questions/5782279/why-does-a-read-only-open-of-a-named-pipe-block
+  readNonBlocking <- openFd pipeName ReadOnly Nothing readNonBlockFlags
+  write <- openFd pipeName WriteOnly Nothing defaultFileFlags
+  readBlocking <- openFd pipeName ReadOnly Nothing defaultFileFlags
+
+  assert_ $ readBlocking >= 0
+  assert_ $ readNonBlocking >= 0
+  assert_ $ write >= 0
+  assert_ $ readBlocking /= readNonBlocking
+  assert_ $ readNonBlocking /= write
+  assert_ $ write /= readBlocking
+  
 
   -- Write the tokens to the pipe:
-  byteCount <- fdWrite writeEnd tokens
+  byteCount <- fdWrite write tokens
   assert_ $ countToInt byteCount == tokensToWrite
 
   -- Set an environment variable to store the handle for 
   -- other programs that might use this server:
-  -- TODO: make compatible with make? Or give up on that?
-  setEnv "MAKEFLAGS" $ show readEnd ++ ", " ++ show writeEnd
-  
+  setEnv "REDO_JOB_SERVER_PIPE" $ show readBlocking ++ ", " ++
+                                  show readNonBlocking ++ ", " ++
+                                  show write
+
   -- Return the read and write ends of the pipe:
-  return $ JobServerHandle (readEnd, writeEnd)
+  return $ JobServerHandle (readBlocking, readNonBlocking, write)
   where tokens = concatMap show $ take tokensToWrite [(1::Integer)..]
         tokensToWrite = n-1
+        readNonBlockFlags = 
+          OpenFileFlags { nonBlock = True, append = False, 
+                          exclusive = False, noctty = False, 
+                          trunc = False }
 
+-- Get a job server that has already been created:
 getJobServer :: IO JobServerHandle
-getJobServer = do flags <- getEnv "MAKEFLAGS"
+getJobServer = do flags <- getEnv "REDO_JOB_SERVER_PIPE"
                   let handle = handle' flags
-                  return $ JobServerHandle (Fd $ head handle, Fd $ handle !! 1)
+                  return $ JobServerHandle (Fd $ head handle, Fd $ handle !! 1, Fd $ handle !! 2)
   where handle' flags = map convert (splitBy ',' flags)
         convert a = read a :: CInt
 
+-- Clear the job server by closing all the open file descriptors associated 
+-- with it.
 clearJobServer :: JobServerHandle -> IO ()
-clearJobServer handle = safeCloseFd w >> safeCloseFd r
+clearJobServer handle = safeCloseFd w >> safeCloseFd r >> safeCloseFd r'
   where safeCloseFd fd = catch (closeFd fd) (\(_ :: SomeException) -> return ()) 
-        (r, w) = unJobServerHandle handle
+        (r', r, w) = unJobServerHandle handle
 
 -- Given a list of IO () jobs, run them when a space on the job server is
 -- available.
@@ -73,6 +97,8 @@ runJobs handle (j:jobs) = maybe runJob' forkJob =<< tryGetToken handle
     returnExitCode rets processStatus = return $ code:rets
       where code = getExitCode processStatus
 
+-- Run a single job. Fork it if a token is avalable, otherwise run it on 
+-- the current thread.
 runJob :: JobServerHandle -> IO ExitCode -> IO (Either ProcessID ExitCode)
 runJob handle j = maybe runJob' forkJob =<< tryGetToken handle
   where 
@@ -82,6 +108,7 @@ runJob handle j = maybe runJob' forkJob =<< tryGetToken handle
     runJob' = do ret <- j
                  return $ Right ret
 
+-- Run a job and then return the token associated with it.
 runForkedJob :: JobServerHandle -> Token -> IO ExitCode -> IO ()
 runForkedJob handle token job = do 
   _ <- job
@@ -90,12 +117,12 @@ runForkedJob handle token job = do
 
 -- Wait on job to finish, and return the exit code when it does:
 waitOnJob :: ProcessID -> IO ExitCode
-waitOnJob pid = fmap (maybe (ExitFailure 1) getExitCode) (getProcessStatus True False pid)
+waitOnJob pid = (maybe (ExitFailure 1) getExitCode) <$> (getProcessStatus True False pid)
 
 -- Return a job's exit code if it's finished, otherwise return
 -- nothing.
 tryWaitOnJob :: ProcessID -> IO (Maybe ExitCode)
-tryWaitOnJob pid = fmap (fmap getExitCode) (getProcessStatus False False pid)
+tryWaitOnJob pid = (getExitCode <$>) <$> (getProcessStatus False False pid)
 
 -- Get the exit code from a process status:
 getExitCode :: ProcessStatus -> ExitCode
@@ -105,20 +132,34 @@ getExitCode (Stopped _) = ExitFailure 1
 
 -- Get a token if one is available, otherwise return Nothing:
 tryGetToken :: JobServerHandle -> IO (Maybe Token)
-tryGetToken handle = catch readPipe (\(_ :: SomeException) -> return Nothing) 
-  where readPipe = do (token, byteCount) <- fdRead r 1
-                      assert_ $ countToInt byteCount == 1
-                      return $ Just $ Token token
-        (r, _) = unJobServerHandle handle
+tryGetToken handle = catch (Just <$> (readToken r)) (\(_ :: SomeException) -> return Nothing) 
+  where (_, r, _) = unJobServerHandle handle
+
+--tryGetToken :: JobServerHandle -> IO (Maybe Token)
+--tryGetToken handle = do fdReady <- hSelect [r] [] []
+--                        assert_ $ fdRead >= 0
+--                        if rdReady < 1 then return Nothing
+--                        else do token <- readToken r
+--                                return $ Just $ token
+--  where (r, _) = unJobServerHandle handle
+
 
 -- Wait for a token to become available and then return it:
---getToken :: JobServerHandle -> IO ()
+getToken :: JobServerHandle -> IO Token
+getToken handle = readToken r
+  where (r, _, _) = unJobServerHandle handle
+
+-- Blocking read the next token from the pipe:
+readToken :: Fd -> IO Token
+readToken fd = do (token, byteCount) <- fdRead fd 1
+                  assert_ $ countToInt byteCount == 1
+                  return $ Token token
 
 -- Return a token to the pipe:
 returnToken :: JobServerHandle -> Token -> IO ()
 returnToken handle token = do byteCount <- fdWrite w (unToken token)
                               assert_ $ countToInt byteCount == 1
-  where (_, w) = unJobServerHandle handle
+  where (_, _, w) = unJobServerHandle handle
 
 -- Convenient assert function:
 assert_ :: Monad m => Bool -> m ()

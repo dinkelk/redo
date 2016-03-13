@@ -4,7 +4,8 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, getLockFileDatabase,
                  markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep,
                  getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, getTempKey, TempKey, Key(..), initializeSession, createLockFile) where
+                 isSource, getKey, getTempKey, TempKey, Key(..), initializeSession, createLockFile,
+                 getJobServerPipe) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -232,6 +233,12 @@ createLockFile target = do
   lockFileDir <- getLockFileDatabase key
   return $ lockFileDir ++ "l"
   where key = getTempKey target
+
+getJobServerPipe :: IO FilePath
+getJobServerPipe = do 
+  lockFileDir <- redoTempDirectory
+  return $ lockFileDir </> "tokenpipe"
+
 ---------------------------------------------------------------------
 -- Functions getting database values:
 ---------------------------------------------------------------------
