@@ -160,8 +160,11 @@ buildTargets buildFunc targets = do
 
   -- Exit immediately if something failed:
   maybe (do
-    -- Wait on all jobs to complete:
+    -- Give up token while we wait on all jobs to complete:
+    returnToken handle (Token "0")
     remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
+    -- Get token again before we continue:
+    _ <- getToken handle
     -- Exit immediately if something failed:
     maybe (do
       -- Wait to acquire the lock, and build the remaining unbuilt files
