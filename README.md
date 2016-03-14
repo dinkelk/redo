@@ -10,7 +10,7 @@ I intend to continue maintaining and improving this implementation of `redo` for
 
 ## Installation
 
-To install redo, first make sure you have [GHC](https://www.haskell.org/ghc/) installed. For some, it may be easier to just install the whole [Haskell Platform](https://www.haskell.org/platform/).
+To install redo, first make sure you have [GHC](https://www.haskell.org/ghc/) and [cabal](https://www.haskell.org/cabal/download.html) installed. The easiest way is to just install the whole [Haskell Platform](https://www.haskell.org/platform/).
 
 Next, clone this repository and run:
 
@@ -19,8 +19,6 @@ Next, clone this repository and run:
 in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, `redo-ifcreate`, and `redo-always` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 
 ## Usage
-
-`redo` is a handful of very sharp tools which you can use 
 
 ## About This Implementation
 
