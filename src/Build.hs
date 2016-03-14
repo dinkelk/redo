@@ -1,5 +1,3 @@
--- adding StandAloneDeriving extension:
--- {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, storeIfCreateDependencies,
@@ -57,8 +55,8 @@ storeDependencies storeAction dependencies = do
 -- Returns true if program was invoked from within a .do file, false if run from commandline
 isRunFromDoFile :: IO Bool
 isRunFromDoFile = do 
-  -- This is the top-level (first) call to redo by if REDO_TARGET does not yet exist.
-  redoTarget <- lookupEnv "REDO_TARGET"  
+  -- This is the top-level (first) call to redo by if REDO_KEY does not yet exist.
+  redoTarget <- lookupEnv "REDO_KEY"  
   if isNothing redoTarget || null (fromJust redoTarget) then return False else return True
 
 -- Does the target file or directory exist on the filesystem?
@@ -137,14 +135,9 @@ redoIfChange = buildTargets redoIfChange'
                                 return ExitSuccess
                               else noDoFileError target
 
--- Lock a file and run a function that takes that file as input.
--- If the file is already locked, skip running the function on that
--- file initially, and continue to trying to run the function on the next
--- file in the list. In a second pass, wait as long as it takes to lock 
--- on the files that were initially skipped before running the function.
 -- This function allows us to build all the targets that don't have
 -- lock contention first, buying us a little time before we wait to build
--- the files under lock contention
+-- the files under lock contention.
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
   handle <- getJobServer
@@ -183,7 +176,7 @@ buildTargets buildFunc targets = do
       tryBuild' absTarget
       where
         tryBuild' :: Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
-        tryBuild' absTarget = do lckFileName <- createLockFile absTarget
+        tryBuild' absTarget = do lckFileName <- getLockFile absTarget
                                  maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild absTarget) 
                                    =<< tryLockFile lckFileName Exclusive
         runBuild :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
@@ -288,7 +281,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   let doFileKey = getKey $ Target $ unDoFile doFile
   initializeSourceDatabase doFileKey $ Target $ unDoFile doFile
 
-  -- Add REDO_TARGET to environment, and make sure there is only one REDO_TARGET in the environment
+  -- Add to environment, and make sure there is only one of each variable added:
   oldEnv <- getEnvironment
   let newEnv = toList $ adjust (++ ":.") "PATH" 
                       $ insert "REDO_SESSION" sessionNumber
@@ -297,7 +290,6 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_NO_COLOR" noColor
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
-                      $ insert "REDO_TARGET" (unTarget target)
                       $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs 
                       $ fromList oldEnv
@@ -314,6 +306,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                            nonZeroExitStr code
                            return $ ExitFailure code
   where
+    -- Print generic exit string:
     nonZeroExitStr code = putErrorStrLn $ "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
                                            unTarget target ++ "' with exit code: " ++ show code 
 
@@ -378,6 +371,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
               (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)                                                  
                                                  renameDirectory old (unTarget new) ) (\(_ :: SomeException) -> return ()))
     
+    -- Error messages for improper use of redo:
     wroteToStdoutError :: IO ()
     wroteToStdoutError = putErrorStrLn $
       "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
@@ -424,10 +418,10 @@ shellCmd shellArgs doFile target = do
 -- Temporary files:
 tmp3File :: Target -> FilePath
 tmp3File target = unTarget target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
-tmpStdoutFile :: FilePath -> Target -> FilePath
--- Stdout file name. Note we make this in the current directory, regardless of the target directory,
+-- Stdout file name. Note we make this in provided directory, regardless of the target directory,
 -- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
--- file.
+-- file. Users of this function will provide which directory to put the temporary filename
+tmpStdoutFile :: FilePath -> Target -> FilePath
 tmpStdoutFile dir target = dir </> takeFileName(unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Function to check if file exists, and if it does, remove it:

@@ -1,5 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 module UpToDate (upToDate) where
 
@@ -9,7 +7,11 @@ import System.FilePath (takeExtension)
 import Types
 import Database 
 
+-- This module provides a single function which returns whether a
+-- redo target needs to be rebuilt or if the target is up to date.
+---------------------------------------------------------------------
 -- Debug helpers:
+---------------------------------------------------------------------
 --import Debug.Trace (trace)
 debug :: c -> String -> c
 debug a _ = a
@@ -20,13 +22,15 @@ debug a _ = a
 ---------------------------------------------------------------------
 -- Top upToDate which should be called by redo-ifchange. Return true if a file is clean and does
 -- not need to be built. Return false if a file is dirty and needs to be rebuilt.
--- Note: target must be the absolute canonicalized path to the target
+-- Note: target must be the absolute canonicalized path to the target.
 upToDate :: Key -> TempKey -> Target -> IO Bool
 upToDate = upToDate'' 0
 
+-- Up to date function when the level is already known:
 upToDate' :: Int -> Target -> IO Bool
 upToDate' level target = upToDate'' level (getKey target) (getTempKey target) target
 
+-- Up to date function when the level and target keys are already known:
 upToDate'' :: Int -> Key -> TempKey -> Target -> IO Bool
 upToDate'' level key tempKey target = do
   return () `debug'` "=checking"
@@ -64,6 +68,9 @@ upToDate'' level key tempKey target = do
     returnFalse :: IO Bool
     returnFalse = markDirty tempKey >> return False
     
+-- A continuation of UpToDate''. This function checks if the target is a source 
+-- file or if a new do file was found or removed. Finally it checks to see if the
+-- target's dependencies are up to date:
 upToDate''' :: Int -> Target -> Key -> IO Bool
 upToDate''' level target key = do
   source <- isSource key  
@@ -135,4 +142,3 @@ mapOr func (x:xs) = do boolean <- func x
                        -- Optimization: cut the evaluation short if a single True is found
                        if boolean then return True
                        else mapOr func xs
-

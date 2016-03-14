@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Types(stampTarget, safeStampTarget, doesTargetExist, doesDoFileExist, findDoFile, Stamp(..), DoFile(..), Target(..)) where
@@ -14,6 +13,7 @@ import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSiz
 
 import FilePathUtil
 
+-- This module provides basic types for redo
 ---------------------------------------------------------------------
 -- Basic Redo Type Definitions:
 ---------------------------------------------------------------------
@@ -38,21 +38,19 @@ getTimeStamp :: Target -> IO Stamp
 getTimeStamp target = do
   st <- getFileStatus $ unTarget target
   return $ Stamp $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
---getTimeStamp :: Target -> IO Stamp
---getTimeStamp target = do
---  st <- getFileStatus $ unTarget target
---  return $ Stamp $ BS.pack $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
 
--- Hash the file
+-- Hash the file (no longer supported, using timestamps for speed)
 -- getTargetHashStamp :: Target -> IO Stamp
 -- getTargetHashStamp file = Stamp <$> hash `liftM` unStamp <$> readMetaFile (unTarget file)
 
 ---------------------------------------------------------------------
 -- Existance functions:
 ---------------------------------------------------------------------
+-- Does a do file exist on the file system?
 doesDoFileExist :: DoFile -> IO Bool
 doesDoFileExist doFile = doesFileExist $ unDoFile doFile 
 
+-- Does a target exist on the file system?
 doesTargetExist :: Target -> IO Bool
 doesTargetExist target = (||) <$> doesFileExist filePath <*> doesDirectoryExist filePath
   where filePath = unTarget target

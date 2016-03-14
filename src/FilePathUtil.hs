@@ -10,6 +10,7 @@ import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, path
 import System.FilePath.Glob (globDir1, compile)
 import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
 
+-- This module provides some basic file path handling for redo
 ---------------------------------------------------------------------
 -- # Defines
 ---------------------------------------------------------------------
@@ -61,7 +62,7 @@ findCommonRoot filePath1 filePath2 = joinPath $ findCommonRoot' (splitDirectorie
         findCommonRoot' (h1:path1) (h2:path2) = if h1 == h2 then h1 : findCommonRoot' path1 path2
                                                 else []
 
--- My version of makeRelative which actually works and inserts proper ".." where it can
+-- My version of makeRelative which actually works and inserts proper ".." where it can:
 makeRelative' :: FilePath -> FilePath -> FilePath
 makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then joinPath (replicate numParentDirs "..") </> path2NoRoot
                                     else filePath2
@@ -76,7 +77,7 @@ makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then joinPath (replica
 canonicalizePath' :: FilePath -> IO FilePath
 canonicalizePath' path = removeDotDirs <$> makeAbsolute path
 
--- Remove files that match a globString, ie. "*.txt"
+-- Remove files that match a globString, ie. "*.txt":
 safeRemoveGlob :: FilePath -> String -> IO ()
 safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile globString) directory
   where safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())

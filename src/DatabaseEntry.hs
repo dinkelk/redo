@@ -1,6 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
 
 import System.Directory (getDirectoryContents, doesDirectoryExist)

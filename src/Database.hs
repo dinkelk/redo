@@ -1,11 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
-                 getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, getLockFileDatabase,
-                 markDirty, storeStamp, doesDatabaseExist, storeIfChangeDep, storeAlwaysDep,
-                 getBuiltTargetPath, isDirty, initializeSourceDatabase, isClean, getDoFile, getStamp, 
-                 isSource, getKey, getTempKey, TempKey, Key(..), initializeSession, createLockFile,
-                 getJobServerPipe) where
+                 getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, markDirty, storeStamp, 
+                 doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty, 
+                 initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey, 
+                 TempKey(..), Key(..), initializeSession, getLockFile, getJobServerPipe) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -228,12 +227,14 @@ getCleanEntry = getCacheEntry "c"
 getDirtyEntry :: TempKey -> IO Entry
 getDirtyEntry = getCacheEntry "d"
 
-createLockFile :: Target -> IO FilePath
-createLockFile target = do 
+-- Get the filename for a lockfile for a particular target:
+getLockFile :: Target -> IO FilePath
+getLockFile target = do 
   lockFileDir <- getLockFileDatabase key
   return $ lockFileDir ++ "l"
   where key = getTempKey target
 
+-- Get the file for the job server named pipe:
 getJobServerPipe :: IO FilePath
 getJobServerPipe = do 
   lockFileDir <- redoTempDirectory
@@ -250,6 +251,7 @@ getStamp key = catch (
      return $ Just $ Stamp contents)
   (\(_ :: SomeException) -> return Nothing)
 
+-- Get the stored if create dependencies for a target:
 getIfCreateDeps :: Key -> IO [Target]
 getIfCreateDeps key = do
   ifCreateEntry <- getIfCreateEntry key
@@ -261,6 +263,7 @@ getIfCreateDeps key = do
           (\(_ :: SomeException) -> return [])
         convert = Target . unescapeFilePath
 
+-- Get the stored if change dependencies for a target:
 getIfChangeDeps :: Key -> IO [Target]
 getIfChangeDeps key = do
   ifChangeDir <- getIfChangeEntry key
@@ -272,13 +275,15 @@ getIfChangeDeps key = do
           (\(_ :: SomeException) -> return [])
         convert = Target . unescapeFilePath
 
+-- Has the target been marked clean in the cache?:
 isClean :: TempKey -> IO Bool 
 isClean key = doesEntryExist =<< getCleanEntry key
 
+-- Has the target been marked dirty in the cache?:
 isDirty :: TempKey -> IO Bool 
 isDirty key = doesEntryExist =<< getDirtyEntry key
 
--- Retrieve the cached do file path inside meta dir
+-- Retrieve the cached do file path stored in the database:
 getDoFile :: Key -> IO (Maybe DoFile)
 getDoFile key = do
   doFileDir <- getDoFileEntry key
@@ -296,7 +301,6 @@ getBuiltTargetPath key target = do
         returnPhonyIfExists failFunc entry = bool failFunc (return $ Just $ Target $ entryToFilePath entry) =<< doesEntryExist entry
 
 ---------------------------------------------------------------------
-
 -- Functions writing database entries:
 ---------------------------------------------------------------------
 storeIfChangeDep :: Key -> Target -> IO () 
@@ -306,42 +310,50 @@ storeIfChangeDep key dep = do
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
-storeIfCreateDep key dep = bool (storeIfCreateDep' key dep) 
+storeIfCreateDep key dep = bool storeIfCreateDep'
   (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep
+  where storeIfCreateDep' :: IO () 
+        storeIfCreateDep' = do
+          ifCreateEntry <- getIfCreateEntry key
+          appendEntry ifCreateEntry (escapeFilePath $ unTarget dep)
 
-storeIfCreateDep' :: Key -> Target -> IO () 
-storeIfCreateDep' key dep = do
-  ifCreateEntry <- getIfCreateEntry key
-  appendEntry ifCreateEntry (escapeFilePath $ unTarget dep)
-
+-- Store an "always dirty" dependency for a target:
 storeAlwaysDep :: Key -> IO () 
 storeAlwaysDep key = createEntry =<< getAlwaysEntry key
 
+-- Check to see if a target has an "always dirty" dependency:
 hasAlwaysDep :: Key -> IO Bool
 hasAlwaysDep key = doesEntryExist =<< getAlwaysEntry key
 
+-- Mark a target as a source file in the cache:
 markSource :: Key -> IO () 
 markSource key = createEntry =<< getSourceEntry key
 
+-- Check to see if a target is a source file:
 isSource :: Key -> IO Bool
 isSource key = doesEntryExist =<< getSourceEntry key
 
+-- Store a phony target for the given target in the database:
 storePhonyTarget :: Key -> IO () 
 storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
   writeEntry phonyTargetDir (escapeFilePath ".")
 
+-- Mark a target as clean in the cache:
 markClean :: TempKey -> IO ()
 markClean key = createEntry =<< getCleanEntry key
 
+-- Mark a target as dirty in the cache:
 markDirty :: TempKey -> IO ()
 markDirty key = createEntry =<< getDirtyEntry key
 
+-- Cache the do file name in the target's database:
 storeDoFile :: Key -> DoFile -> IO ()
 storeDoFile key doFile = do
   doFileDir <- getDoFileEntry key
   writeEntry doFileDir (escapeFilePath $ unDoFile doFile)
 
+-- Store a stamp for the target in the database:
 storeStamp :: Key -> Stamp -> IO ()
 storeStamp key stamp = do
   stampDir <- getStampEntry key
