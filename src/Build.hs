@@ -161,10 +161,10 @@ buildTargets buildFunc targets = do
   -- Exit immediately if something failed:
   maybe (do
     -- Give up token while we wait on all jobs to complete:
-    returnToken handle (Token "0")
+    returnToken handle
     remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
     -- Get token again before we continue:
-    _ <- getToken handle
+    getToken handle
     -- Exit immediately if something failed:
     maybe (do
       -- Wait to acquire the lock, and build the remaining unbuilt files
@@ -196,18 +196,18 @@ buildTargets buildFunc targets = do
     waitBuild handle (target, lckFileName) = do 
       -- Return my token before blocking on the filepath. This allows another redo process to be run
       -- in the meantime.
-      returnToken handle (Token "0")
+      returnToken handle 
       -- Wait to acquire a lock:
       lock <- lockFile lckFileName Exclusive 
       -- Ok we have a lock, but we need to get a token first, so release the lock
       -- and get a token. If we don't do it in this order we could encounter deadlock.
       unlockFile lock
-      _ <- getToken handle
+      getToken handle
       -- Try to grab the lock again. This should work most of the time, unless a process
       -- beats us to the lock right after we released it. If we don't get a lock, try again.
       -- If we get the lock, run the build function and return the exit code.
       maybe (waitBuild handle (target, lckFileName)) 
-            (waitBuild') =<< tryLockFile lckFileName Exclusive
+            waitBuild' =<< tryLockFile lckFileName Exclusive
       where waitBuild' lock = do code <- buildFunc target
                                  unlockFile lock
                                  return code

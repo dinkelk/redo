@@ -9,16 +9,20 @@ import Control.Exception (catch, SomeException(..))
 import Foreign.C.Types (CInt)
 import System.Environment (getEnv, setEnv)
 import System.Exit (ExitCode(..))
-import System.Posix.IO (fdWrite, fdRead, closeFd)
+import System.Posix.IO (fdWrite, fdRead, closeFd, openFd, OpenMode(..), defaultFileFlags, OpenFileFlags(..))
 import System.Posix.Types (Fd(..), ByteCount, ProcessID)
 import System.Posix.Process (forkProcess, getProcessStatus, ProcessStatus(..))
 import System.Posix.Files (createNamedPipe, ownerReadMode, ownerWriteMode, namedPipeMode, unionFileModes)
-import System.Posix.IO (openFd, OpenMode(..), defaultFileFlags, OpenFileFlags(..))
+import Data.Bool (bool)
+import Control.Monad (void)
 
 import Database
 
 newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd, Fd) }
-newtype Token = Token { unToken :: String } deriving (Eq, Show)
+newtype Token = Token { unToken :: Char } deriving (Eq, Show)
+
+jobServerToken :: Token
+jobServerToken = Token 't'
 
 initializeJobServer :: Int -> IO JobServerHandle
 initializeJobServer n = do 
@@ -54,7 +58,7 @@ initializeJobServer n = do
 
   -- Return the read and write ends of the pipe:
   return $ JobServerHandle (readBlocking, readNonBlocking, write)
-  where tokens = concatMap show $ take tokensToWrite [(1::Integer)..]
+  where tokens = replicate tokensToWrite (unToken jobServerToken)
         tokensToWrite = n-1
         readNonBlockFlags = 
           OpenFileFlags { nonBlock = True, append = False, 
@@ -82,11 +86,11 @@ runJobs :: JobServerHandle -> [IO ExitCode] -> IO [ExitCode]
 runJobs _ [] = return []
 runJobs _ [j] = do ret <- j 
                    return [ret]
-runJobs handle (j:jobs) = maybe runJob' forkJob =<< tryGetToken handle
+runJobs handle (j:jobs) = bool runJob' forkJob =<< tryGetToken handle
   where 
-    forkJob token = do
+    forkJob = do
       -- Fork new thread to run job:
-      processId <- forkProcess $ runForkedJob handle token j
+      processId <- forkProcess $ runForkedJob handle j
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
       maybe (return $ ExitFailure 1 : rets) (returnExitCode rets) 
@@ -100,29 +104,29 @@ runJobs handle (j:jobs) = maybe runJob' forkJob =<< tryGetToken handle
 -- Run a single job. Fork it if a token is avalable, otherwise run it on 
 -- the current thread.
 runJob :: JobServerHandle -> IO ExitCode -> IO (Either ProcessID ExitCode)
-runJob handle j = maybe runJob' forkJob =<< tryGetToken handle
+runJob handle j = bool runJob' forkJob =<< tryGetToken handle
   where 
-    forkJob token = do
-      processStatus <- forkProcess $ runForkedJob handle token j
+    forkJob = do
+      processStatus <- forkProcess $ runForkedJob handle j
       return $ Left processStatus
     runJob' = do ret <- j
                  return $ Right ret
 
 -- Run a job and then return the token associated with it.
-runForkedJob :: JobServerHandle -> Token -> IO ExitCode -> IO ()
-runForkedJob handle token job = do 
+runForkedJob :: JobServerHandle -> IO ExitCode -> IO ()
+runForkedJob handle job = do 
   _ <- job
-  returnToken handle token
+  returnToken handle 
   return ()
 
 -- Wait on job to finish, and return the exit code when it does:
 waitOnJob :: ProcessID -> IO ExitCode
-waitOnJob pid = (maybe (ExitFailure 1) getExitCode) <$> (getProcessStatus True False pid)
+waitOnJob pid = maybe (ExitFailure 1) getExitCode <$> getProcessStatus True False pid
 
 -- Return a job's exit code if it's finished, otherwise return
 -- nothing.
 tryWaitOnJob :: ProcessID -> IO (Maybe ExitCode)
-tryWaitOnJob pid = (getExitCode <$>) <$> (getProcessStatus False False pid)
+tryWaitOnJob pid = (getExitCode <$>) <$> getProcessStatus False False pid
 
 -- Get the exit code from a process status:
 getExitCode :: ProcessStatus -> ExitCode
@@ -131,34 +135,25 @@ getExitCode (Terminated _ _) = ExitFailure 1
 getExitCode (Stopped _) = ExitFailure 1
 
 -- Get a token if one is available, otherwise return Nothing:
-tryGetToken :: JobServerHandle -> IO (Maybe Token)
-tryGetToken handle = catch (Just <$> (readToken r)) (\(_ :: SomeException) -> return Nothing) 
+tryGetToken :: JobServerHandle -> IO Bool
+tryGetToken handle = catch (readToken r >> return True) (\(_ :: SomeException) -> return False) 
   where (_, r, _) = unJobServerHandle handle
 
---tryGetToken :: JobServerHandle -> IO (Maybe Token)
---tryGetToken handle = do fdReady <- hSelect [r] [] []
---                        assert_ $ fdRead >= 0
---                        if rdReady < 1 then return Nothing
---                        else do token <- readToken r
---                                return $ Just $ token
---  where (r, _) = unJobServerHandle handle
-
-
 -- Wait for a token to become available and then return it:
-getToken :: JobServerHandle -> IO Token
-getToken handle = readToken r
+getToken :: JobServerHandle -> IO ()
+getToken handle = void $ readToken r
   where (r, _, _) = unJobServerHandle handle
 
 -- Blocking read the next token from the pipe:
 readToken :: Fd -> IO Token
 readToken fd = do (token, byteCount) <- fdRead fd 1
                   assert_ $ countToInt byteCount == 1
-                  return $ Token token
+                  return $ Token $ head token
 
 -- Return a token to the pipe:
-returnToken :: JobServerHandle -> Token -> IO ()
-returnToken handle token = do byteCount <- fdWrite w (unToken token)
-                              assert_ $ countToInt byteCount == 1
+returnToken :: JobServerHandle -> IO ()
+returnToken handle = do byteCount <- fdWrite w $ unToken jobServerToken:""
+                        assert_ $ countToInt byteCount == 1
   where (_, _, w) = unJobServerHandle handle
 
 -- Convenient assert function:
@@ -169,6 +164,7 @@ assert_ c = assert c (return ())
 countToInt :: ByteCount -> Int
 countToInt = fromIntegral
 
+-- Split a string into a list of strings given a delimiter:
 splitBy :: Char -> String -> [String]
 splitBy delimiter = foldr f [[]] 
   where f c l@(x:xs) | c == delimiter = []:l
