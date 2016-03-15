@@ -160,9 +160,7 @@ mainTop numJobs progName targets = do
 
   -- Perform the proper action based on the program name:
   case progName of 
-    -- Run redo only on buildable files from the target's directory
     "redo" -> exitWith' handle =<< redo targets'
-    -- Run redo-ifchange only on buildable files from the target's directory
     "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
@@ -183,16 +181,11 @@ mainDo :: String -> [Target] -> IO ()
 mainDo progName targets =
   -- Perform the proper action based on the program name:
   case progName of 
-    -- Run redo only on buildable files from the target's directory
     "redo" -> exitWith =<< redo targets
-    -- Run redo-ifchange only on buildable files from the target's directory
-    -- Next store hash information for the parent target from the parent target's directory (current directory)
     "redo-ifchange" -> do exitCode <- redoIfChange targets
                           storeIfChangeDependencies targets
                           exitWith exitCode
-    -- Store redo-ifcreate dependencies for each target in the parent target's directory
     "redo-ifcreate" -> storeIfCreateDependencies targets
-    -- Store a redo-always dependency for the parent target in the parent target's directory
     "redo-always" -> storeAlwaysDependency
     _ -> return ()
 

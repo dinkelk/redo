@@ -303,6 +303,7 @@ getBuiltTargetPath key target = do
 ---------------------------------------------------------------------
 -- Functions writing database entries:
 ---------------------------------------------------------------------
+-- Store ifchange dependencies for a target:
 storeIfChangeDep :: Key -> Target -> IO () 
 storeIfChangeDep key dep = do
   ifChangeEntry <- getIfChangeEntry key
