@@ -18,7 +18,7 @@ Next, clone this repository and run:
 
 in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, `redo-ifcreate`, and `redo-always` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 
-**Note:** The installation will create a [cabal sandbox](https://www.haskell.org/cabal/users-guide/installing-packages.html#sandboxes-basic-usage) in the root directory. This is to prevent `redo`'s dependencies from conflicting with your native cabal packages. If you would rather install all of `redo`'s dependencies globally, edit the `all.do` script appropriately before running `do`.
+**Note:** The installation will create a [cabal sandbox](https://www.haskell.org/cabal/users-guide/installing-packages.html#sandboxes-basic-usage) in the root directory. This is to prevent `redo`'s dependencies from conflicting with your native cabal packages. If you would rather install all of `redo`'s dependencies globally, edit the `all.do` script appropriately before running `./do`.
 
 ## Usage
 
