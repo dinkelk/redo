@@ -140,36 +140,46 @@ redoIfChange = buildTargets redoIfChange'
 -- the files under lock contention.
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
-  handle <- getJobServer
-  keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
-  let keepGoing' = fromMaybe "" keepGoing''
-  let keepGoing = not $ null keepGoing'
+  let len = length targets
+  -- If there is no target, just return a good exit code
+  if len == 0 then return ExitSuccess
+  -- If there is only one target, then just run it on this thread:
+  else if len == 1 then do
+    handle <- getJobServer
+    runBuild handle (head targets)
+  -- If there are multiple targets, try to run things in parallel
+  else do
+    handle <- getJobServer
+    -- Get the keep going variable:
+    keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
+    let keepGoing' = fromMaybe "" keepGoing''
+    let keepGoing = not $ null keepGoing'
+  
+    -- Try to lock file and build all targets and accumulate list of unbuilt targets:
+    results <- mapM1 keepGoing (tryBuild handle) targets 
+    let (remainingTargets, processStatus) = unzip results
+    let exitCodes = rights processStatus
+    let processIDs = lefts processStatus
 
-  -- Try to lock file and build all targets and accumulate list of unbuilt targets:
-  results <- mapM1 keepGoing (tryBuild handle) targets 
-  let (remainingTargets, processStatus) = unzip results
-  let exitCodes = rights processStatus
-  let processIDs = lefts processStatus
-
-  -- Exit immediately if something failed:
-  maybe (do
-    -- Give up token while we wait on all jobs to complete:
-    returnToken handle
-    remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
-    -- Get token again before we continue:
-    getToken handle
     -- Exit immediately if something failed:
     maybe (do
-      -- Wait to acquire the lock, and build the remaining unbuilt files
-      finalExitCodes <- mapM2 keepGoing (waitBuild handle) remainingTargets
-      -- Make sure we wait on all jobs and gather the exit codes before returning:
-      returnExitCode finalExitCodes
+      -- Give up token while we wait on all jobs to complete:
+      returnToken handle
+      remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
+      -- Get token again before we continue:
+      getToken handle
+      -- Exit immediately if something failed:
+      maybe (do
+        -- Wait to acquire the lock, and build the remaining unbuilt files
+        finalExitCodes <- mapM2 keepGoing (waitBuild handle) remainingTargets
+        -- Make sure we wait on all jobs and gather the exit codes before returning:
+        returnExitCode finalExitCodes
+        )
+        return (getFailingExitCode remainingExitCodes)
       )
-      return (getFailingExitCode remainingExitCodes)
-    )
-    return (getFailingExitCode exitCodes)
+      return (getFailingExitCode exitCodes)
   where
-    -- Try to build the target if the do file can be found and there is no lock contention:
+    -- Try to build a target using the job server, otherwise return the unbuild target with the lock file name:
     tryBuild :: JobServerHandle -> Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
     tryBuild handle target = do 
       absTarget <- Target <$> canonicalizePath' (unTarget target)
@@ -177,12 +187,13 @@ buildTargets buildFunc targets = do
       where
         tryBuild' :: Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
         tryBuild' absTarget = do lckFileName <- getLockFile absTarget
-                                 maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild absTarget) 
+                                 maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild' absTarget) 
                                    =<< tryLockFile lckFileName Exclusive
-        runBuild :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
-        runBuild absTarget lock = do processReturn <- runJob handle $ buildFunc absTarget 
-                                     unlockFile lock
-                                     return ((Target "", ""), processReturn)
+        runBuild' :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
+        runBuild' absTarget lock = do processReturn <- runJob handle $ buildFunc absTarget 
+                                      unlockFile lock
+                                      return ((Target "", ""), processReturn)
+
     -- Wait to build the target if the do file is given, regardless of lock contention:
     waitBuild :: JobServerHandle -> (Target, FilePath) -> IO ExitCode
     waitBuild _ (Target "", "") = return ExitSuccess
@@ -200,10 +211,22 @@ buildTargets buildFunc targets = do
       -- beats us to the lock right after we released it. If we don't get a lock, try again.
       -- If we get the lock, run the build function and return the exit code.
       maybe (waitBuild handle (target, lckFileName)) 
-            waitBuild' =<< tryLockFile lckFileName Exclusive
-      where waitBuild' lock = do code <- buildFunc target
-                                 unlockFile lock
-                                 return code
+            (runBuildWithLock target) =<< tryLockFile lckFileName Exclusive
+
+    -- Try to build the target if there is no lock contention:
+    runBuild :: JobServerHandle -> Target -> IO ExitCode
+    runBuild handle target = do
+      absTarget <- Target <$> canonicalizePath' (unTarget target)
+      lckFileName <- getLockFile absTarget
+      maybe (waitBuild handle (absTarget, lckFileName)) (runBuildWithLock absTarget) 
+        =<< tryLockFile lckFileName Exclusive
+
+    -- Given a lock and a target, run the target on this thread and then unlock before returning the
+    -- exit code.
+    runBuildWithLock :: Target -> FileLock -> IO ExitCode
+    runBuildWithLock absTarget lock = do exitCode <- buildFunc absTarget 
+                                         unlockFile lock
+                                         return exitCode
 
     -- Helper function for returning a failing code if it exists, otherwise return success
     returnExitCode :: [ExitCode] -> IO ExitCode
