@@ -22,11 +22,17 @@ in the top level directory. A `bin/` directory will be created with the `redo`, 
 
 ## Usage
 
+>TODO: Add simple examples and usage patterns.
+
 ## About This Implementation
 
 This implementation has been tested on MacOSX but should work on any Unix-like platform.
 
+>TODO: Explain implementation details.
+
 ## Compared to Other Implementations
+
+>TODO: Compare implementation choices to those in other version of redo, and provide rational.
 
 ## Credits
 
