@@ -356,7 +356,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
     moveTempFiles targetIsDirectory = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
-      stdoutSize <- fileSize tmpStdout
+      stdoutSize <- safeFileSize tmpStdout
       newTimeStamp <- safeStampTarget target
       targetIsStillDirectory <- doesDirectoryExist $ unTarget target
       -- See if the user modified $1 directly... we don't care if the user modified a directory target however
@@ -452,5 +452,6 @@ safeRemoveTempFile :: FilePath -> IO ()
 safeRemoveTempFile file = catch (removeFile file) (\(_ :: SomeException) -> safeRemoveDirectoryRecursive file)
 
 -- Get the file size of a file
-fileSize :: FilePath -> IO Integer
-fileSize path = withFile path ReadMode hFileSize
+safeFileSize :: FilePath -> IO Integer
+safeFileSize path = catch (withFile path ReadMode hFileSize) (\(_ :: SomeException) -> return 0)
+
