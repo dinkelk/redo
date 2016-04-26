@@ -22,6 +22,7 @@ data Options = Options {
   help :: Bool,
   dashX :: Bool,
   dashV :: Bool,
+  dashD :: Bool,
   keepGoing :: Bool,
   jobs :: Int,
   shuffle :: Bool,
@@ -34,6 +35,7 @@ defaultOptions = Options {
   help = False,
   dashX = False,
   dashV = False,
+  dashD = False,
   keepGoing = False,
   jobs = 1,
   shuffle = False,
@@ -52,6 +54,7 @@ options =
   , Option ['h','H']  ["help"]        (NoArg setHelp)                "show usage details"
   , Option ['x']      ["xtrace"]      (NoArg setDashX)               "print commands as they are executed with variables expanded"
   , Option ['v']      ["verbose"]     (NoArg setDashV)               "print commands as they are read from .do files"
+  , Option ['d']      ["debug"]       (NoArg setDashD)               "print all shell calls of .do files"
   , Option ['V','?']  ["version"]     (NoArg printVersion)           "print the version number"
   , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)           "keep building even if some targets fail"
   , Option ['s']      ["shuffle"]     (NoArg setShuffle)             "randomize the build order to find dependency bugs"
@@ -70,6 +73,9 @@ setDashX opt = return opt { dashX = True }
 
 setDashV :: Options -> IO Options
 setDashV opt = return opt { dashV = True }
+
+setDashD :: Options -> IO Options
+setDashD opt = return opt { dashD = True }
 
 setKeepGoing :: Options -> IO Options
 setKeepGoing opt = return opt { keepGoing = True }
@@ -115,6 +121,7 @@ main = do
   let Options { help = help', 
                 dashX = dashX',
                 dashV = dashV',
+                dashD = dashD',
                 keepGoing = keepGoing',
                 jobs = jobs',
                 shuffle = shuffle',
@@ -125,6 +132,7 @@ main = do
   when keepGoing' (setEnv "REDO_KEEP_GOING" "TRUE")
   when shuffle' (setEnv "REDO_SHUFFLE" "TRUE")
   when noColor' (setEnv "REDO_NO_COLOR" "TRUE")
+  when dashD' (setEnv "REDO_DEBUG" "TRUE")
 
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.

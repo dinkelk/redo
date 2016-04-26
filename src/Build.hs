@@ -5,7 +5,7 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 
 -- System imports:
 import Control.Applicative ((<$>))
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Exception (catch, SomeException(..))
 import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
@@ -282,9 +282,11 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
   noColor' <- lookupEnv "REDO_NO_COLOR"                -- Disable color printed redo status
+  dashD' <- lookupEnv "REDO_DEBUG"                -- Disable color printed redo status
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
+  let dashD = fromMaybe "" dashD'
   let noColor = fromMaybe "" noColor'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
@@ -295,7 +297,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 
   -- Print what we are currently "redoing"
   putRedoInfo target
-  unless (null shellArgs) (putUnformattedStrLn $ "* " ++ cmd)
+  when (not (null shellArgs) || not (null dashD)) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the target database:
   initializeTargetDatabase key doFile
@@ -311,6 +313,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
                       $ insert "REDO_NO_COLOR" noColor
+                      $ insert "REDO_DEBUG" dashD
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_KEY" (keyToFilePath key)
