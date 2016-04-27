@@ -5,7 +5,7 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 
 -- System imports:
 import Control.Applicative ((<$>))
-import Control.Monad (unless, when)
+import Control.Monad (when)
 import Control.Exception (catch, SomeException(..))
 import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
@@ -291,8 +291,13 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
   let sessionNumber = fromMaybe "" sessionNumber'
-  let targetRel2Do = Target $ makeRelative' redoPath (unTarget target)
-  cmd <- shellCmd shellArgs doFile targetRel2Do
+
+  -- Get the temporary file names for the shellCmd:
+  tmp3 <- getTempFile target 
+  tmpStdout <- getStdoutFile target 
+
+  -- Construct the shell command:
+  cmd <- shellCmd shellArgs doFile target tmp3 tmpStdout
   targetIsDirectory <- doesDirectoryExist $ unTarget target
 
   -- Print what we are currently "redoing"
@@ -322,13 +327,13 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
   exit <- waitForProcess processHandle
   case exit of  
-    ExitSuccess -> do exitCode <- moveTempFiles targetIsDirectory 
+    ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory 
                       -- If the target exists, then store the target stamp
-                      maybe (nonZeroExitStr exitCode) stampBuiltTarget
+                      maybe (nonZeroExitStr exitCode) (stampBuiltTarget tmp3 tmpStdout)
                         =<< getBuiltTargetPath key target
                       bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
     ExitFailure code -> do markDirty tempKey -- we failed to build this target, so mark it dirty
-                           removeTempFiles
+                           removeTempFiles tmp3 tmpStdout
                            nonZeroExitStr code
                            return $ ExitFailure code
   where
@@ -338,25 +343,23 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 
     -- Store the stamp of the built target and mark it as clean
     -- consider storing timestamps in different place, so that they dont get blown away with initialization of db
-    stampBuiltTarget builtTarget = do
+    stampBuiltTarget tmp3 tmpStdout builtTarget = do
       stamp <- stampTarget builtTarget
       storeStamp key stamp
       markClean tempKey -- we just built this target, so we know it is clean now
-      removeTempFiles
+      removeTempFiles tmp3 tmpStdout
 
     -- Remove the temporary files created for a target:
-    removeTempFiles :: IO ()
-    removeTempFiles = do safeRemoveTempFile tmp3
-                         safeRemoveTempFile tmpStdout
+    removeTempFiles :: FilePath -> FilePath -> IO ()
+    removeTempFiles tmp3 tmpStdout = do safeRemoveTempFile tmp3
+                                        safeRemoveTempFile tmpStdout
       
     -- Temporary file names:
     redoPath = takeDirectory $ unDoFile doFile
-    tmp3 = tmp3File target 
-    tmpStdout = tmpStdoutFile redoPath target 
 
     -- Move temp files to target after creation:
-    moveTempFiles :: Bool -> IO Int
-    moveTempFiles targetIsDirectory = do 
+    moveTempFiles :: FilePath -> FilePath -> Bool -> IO Int
+    moveTempFiles tmp3 tmpStdout targetIsDirectory = do 
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- safeFileSize tmpStdout
@@ -411,15 +414,15 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
-shellCmd :: String -> DoFile -> Target -> IO String
-shellCmd shellArgs doFile target = do
+shellCmd :: String -> DoFile -> Target -> FilePath -> FilePath -> IO String
+shellCmd shellArgs doFile target tmp3 tmpStdout = do
   shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote $ unTarget target, quote arg2, quote $ tmp3File target, ">", quote tmpStdoutFile']
+  return $ unwords [shebang, quote $ unDoFile doFile, quote targetRel2Do, quote arg2, quote tmp3, ">", quote tmpStdout]
   where
-    -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the target name with the extension removed.
+    -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the targetRel2Do name with the extension removed.
     -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
     -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do 
-    -- file or a <targetName>.do file. For example the $2 for "redo file.x.y.z" run from different .do files is shown below:
+    -- file or a <targetRel2DoName>.do file. For example the $2 for "redo file.x.y.z" run from different .do files is shown below:
     --
     --    .do file name |         $2  | description 
     --    file.x.y.z.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing 
@@ -428,9 +431,10 @@ shellCmd shellArgs doFile target = do
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
-    tmpStdoutFile' = takeFileName (unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
+    redoPath = takeDirectory $ unDoFile doFile
+    targetRel2Do = makeRelative' redoPath (unTarget target)
     quote string = "\"" ++ string ++ "\""
-    arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 (unTarget target) doExtensions else unTarget target
+    arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 targetRel2Do doExtensions else targetRel2Do
     doExtensions = (takeExtensions . dropExtension . unDoFile) doFile -- remove .do, then grab the rest of the extensions
     createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
     -- Read the shebang from a file and use that as the command. This allows us to run redo files that are in a language
@@ -440,15 +444,6 @@ shellCmd shellArgs doFile target = do
       where 
         readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
-
--- Temporary files:
-tmp3File :: Target -> FilePath
-tmp3File target = unTarget target ++ ".redo1.temp" -- this temp file gets passed as $3 and is written to by programs that do not print to stdout
--- Stdout file name. Note we make this in provided directory, regardless of the target directory,
--- because we don't know if the target directory even exists yet. We can't redirect output to a non-existant
--- file. Users of this function will provide which directory to put the temporary filename
-tmpStdoutFile :: FilePath -> Target -> FilePath
-tmpStdoutFile dir target = dir </> takeFileName(unTarget target) ++ ".redo2.temp" -- this temp file captures what gets written to stdout
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()

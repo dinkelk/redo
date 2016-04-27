@@ -4,7 +4,8 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, markDirty, storeStamp, 
                  doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty, 
                  initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey, 
-                 TempKey(..), Key(..), initializeSession, getLockFile, getJobServerPipe) where
+                 TempKey(..), Key(..), initializeSession, getLockFile, getJobServerPipe, 
+                 getStdoutFile, getTempFile) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -75,6 +76,18 @@ redoLockFileDirectory = do
   root <- redoTempDirectory 
   return $ root </> "locks"
 
+-- Directory for storing temporary target files to automically building redo files
+redoTempTargetDirectory :: IO FilePath
+redoTempTargetDirectory = do
+  root <- redoTempDirectory 
+  return $ root </> "temp"
+
+-- Directory for storing temporary target files to automically building redo files
+redoStdoutTargetDirectory :: IO FilePath
+redoStdoutTargetDirectory = do
+  root <- redoTempDirectory 
+  return $ root </> "stdout"
+
 ---------------------------------------------------------------------
 -- Functions creating and clearing the cache
 ---------------------------------------------------------------------
@@ -87,6 +100,8 @@ createRedoTempDirectory :: IO ()
 createRedoTempDirectory = do
   safeCreateDirectoryRecursive =<< redoCacheDirectory
   safeCreateDirectoryRecursive =<< redoLockFileDirectory
+  safeCreateDirectoryRecursive =<< redoTempTargetDirectory
+  safeCreateDirectoryRecursive =<< redoStdoutTargetDirectory
 
 ---------------------------------------------------------------------
 -- Functions getting database keys for targets
@@ -111,11 +126,23 @@ hashString target = hex $ BS.unpack $ hash $ BS.pack $ unTarget target
 ---------------------------------------------------------------------
 -- Functions for setting up a database for a target:
 ---------------------------------------------------------------------
--- Get the lock file directory for a target:
+-- Get the lock file prefix for a target:
 getLockFileDatabase :: TempKey -> IO FilePath 
 getLockFileDatabase key = do
   lockFileDir <- redoLockFileDirectory
   return $ lockFileDir </> tempKeyToFilePath key
+
+-- Get the temp file prefix for a target:
+getTempTargetDatabase :: TempKey -> IO FilePath 
+getTempTargetDatabase key = do
+  tempFileDir <- redoTempTargetDirectory
+  return $ tempFileDir </> tempKeyToFilePath key
+
+-- Get the stdout file prefix for a target:
+getStdoutTargetDatabase :: TempKey -> IO FilePath 
+getStdoutTargetDatabase key = do
+  stdoutFileDir <- redoStdoutTargetDirectory
+  return $ stdoutFileDir </> tempKeyToFilePath key
 
 -- Get the database directory for a target's stamp:
 getStampDatabase :: Key -> IO FilePath
@@ -232,6 +259,20 @@ getLockFile :: Target -> IO FilePath
 getLockFile target = do 
   lockFileDir <- getLockFileDatabase key
   return $ lockFileDir ++ "l"
+  where key = getTempKey target
+
+-- Get temporary target file for a particular target:
+getTempFile :: Target -> IO FilePath
+getTempFile target = do
+  tempFileDir <- getTempTargetDatabase key
+  return $ tempFileDir ++ "f"
+  where key = getTempKey target
+
+-- Get temporary target file for a particular target:
+getStdoutFile :: Target -> IO FilePath
+getStdoutFile target = do
+  stdoutFileDir <- getStdoutTargetDatabase key
+  return $ stdoutFileDir ++ "f"
   where key = getTempKey target
 
 -- Get the file for the job server named pipe:
