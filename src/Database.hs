@@ -5,7 +5,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty, 
                  initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey, 
                  TempKey(..), Key(..), initializeSession, getLockFile, getJobServerPipe, 
-                 getStdoutFile, getTempFile) where
+                 getStdoutFile, getTempFile, markBuilt, isBuilt) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -247,6 +247,10 @@ getCacheEntry name key = do
   return $ Entry $ cacheDir ++ name
 
 -- Get the entry for marking a target clean:
+getBuiltEntry :: TempKey -> IO Entry
+getBuiltEntry = getCacheEntry "b"
+
+-- Get the entry for marking a target clean:
 getCleanEntry :: TempKey -> IO Entry
 getCleanEntry = getCacheEntry "c"
 
@@ -317,6 +321,10 @@ getIfChangeDeps key = do
         convert = Target . unescapeFilePath
 
 -- Has the target been marked clean in the cache?:
+isBuilt :: TempKey -> IO Bool 
+isBuilt key = doesEntryExist =<< getBuiltEntry key
+
+-- Has the target been marked clean in the cache?:
 isClean :: TempKey -> IO Bool 
 isClean key = doesEntryExist =<< getCleanEntry key
 
@@ -380,6 +388,10 @@ storePhonyTarget :: Key -> IO ()
 storePhonyTarget key = do
   phonyTargetDir <- getPhonyTargetEntry key
   writeEntry phonyTargetDir (escapeFilePath ".")
+
+-- Mark a target as built in the cache:
+markBuilt :: TempKey -> IO ()
+markBuilt key = createEntry =<< getBuiltEntry key
 
 -- Mark a target as clean in the cache:
 markClean :: TempKey -> IO ()

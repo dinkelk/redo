@@ -1,4 +1,4 @@
-module DatabaseEntry(Entry(..), doesEntryExist, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
+module DatabaseEntry(Entry(..), doesEntryExist, removeEntry, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
 
 import System.Directory (getDirectoryContents, doesDirectoryExist)
 import System.FilePath ((</>))
@@ -25,6 +25,10 @@ doesEntryExist entry = doesDirectoryExist $ entryToFilePath entry
 -- Creation of an empty database entry:
 createEntry :: Entry -> IO ()
 createEntry entry = safeCreateDirectoryRecursive (entryToFilePath entry)
+
+-- Removal of an database entry:
+removeEntry :: Entry -> IO ()
+removeEntry entry = safeRemoveDirectoryRecursive (entryToFilePath entry)
 
 -- Write to a newly created entry or overwrite the previous entry:
 writeEntry :: Entry -> String -> IO ()

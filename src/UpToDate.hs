@@ -43,21 +43,30 @@ upToDate'' level key tempKey target = do
     -- If neither a target or a phony target exists, then the target is obviously not up to date
     if isNothing existingTarget then return False `debug'` "-not built"
     else do
-      clean <- isClean tempKey  
-      -- If we have already checked off this target as up to date, there is no need to check again
-      if clean then return True `debug'` "+clean"
+      built <- isBuilt tempKey  
+      -- If we have built this target already this session, and the level of recursion is 0 we
+      -- know we are trying to rebuild this target but it has already built so it is up to date.
+      -- If the level of recursion is greater than zero we know that this target is a newly 
+      -- rebuilt dependency of the current target, so that target needs to be rebuilt too, so
+      -- it is not up to date.
+      if built then if level == 0 then return True `debug'` "+already built"
+                                  else return False `debug'` "-newly built"
       else do
-        dirty <- isDirty tempKey 
-        -- If we have already checked off this target as dirty, don't delay, return not up to date
-        if dirty then return False `debug'` "-dirty"
-        else do 
-          cachedStamp <- getStamp key
-          currentStamp <- safeStampTarget (fromJust existingTarget)
-          -- The target has been modified because the timestamps dont match
-          if cachedStamp /= currentStamp then returnFalse `debug'` "-modified"
-          else do 
-            ret <- upToDate''' level target key
-            if ret then returnTrue else returnFalse
+       clean <- isClean tempKey  
+       -- If we have already checked off this target as up to date, there is no need to check again
+       if clean then return True `debug'` "+clean"
+       else do
+         dirty <- isDirty tempKey 
+         -- If we have already checked off this target as dirty, don't delay, return not up to date
+         if dirty then return False `debug'` "-dirty"
+         else do 
+           cachedStamp <- getStamp key
+           currentStamp <- safeStampTarget (fromJust existingTarget)
+           -- The target has been modified because the timestamps dont match
+           if cachedStamp /= currentStamp then returnFalse `debug'` "-modified"
+           else do 
+             ret <- upToDate''' level target key
+             if ret then returnTrue else returnFalse
   where
     -- Convenient debug function:
     debug' = debugUpToDate level target

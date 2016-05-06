@@ -341,12 +341,11 @@ runDoFile key tempKey target currentTimeStamp doFile = do
     nonZeroExitStr code = putErrorStrLn $ "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
                                            unTarget target ++ "' with exit code: " ++ show code 
 
-    -- Store the stamp of the built target and mark it as clean
-    -- consider storing timestamps in different place, so that they dont get blown away with initialization of db
+    -- Store the stamp of the built target:
     stampBuiltTarget tmp3 tmpStdout builtTarget = do
       stamp <- stampTarget builtTarget
       storeStamp key stamp
-      markClean tempKey -- we just built this target, so we know it is clean now
+      markBuilt tempKey -- we just built this target, so mark it as built
       removeTempFiles tmp3 tmpStdout
 
     -- Remove the temporary files created for a target:
