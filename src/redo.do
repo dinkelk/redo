@@ -2,8 +2,8 @@
 source=`ls *.hs`
 redo-ifchange $source
 
-PROFILE="-prof -fprof-auto -rtsopts"
-#PROFILE=
+#PROFILE="-prof -fprof-auto -rtsopts"
+PROFILE=
 ROOT=`pwd`/..
 SANDBOX=$ROOT/.cabal-sandbox/x86_64-osx-ghc-7.8.3-packages.conf.d
 PACKAGE="-package-db=$SANDBOX"
