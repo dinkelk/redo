@@ -5,7 +5,7 @@ redo-ifchange $source
 #PROFILE="-prof -fprof-auto -rtsopts"
 PROFILE=
 ROOT=`pwd`/..
-SANDBOX=$ROOT/.cabal-sandbox/x86_64-osx-ghc-7.8.3-packages.conf.d
+SANDBOX="`echo $ROOT/.cabal-sandbox/*-packages.conf.d | head -1`"
 PACKAGE="-package-db=$SANDBOX"
 
 # Compile Main.hs to temporary filename $3
