@@ -186,7 +186,7 @@ buildTargets buildFunc targets = do
       tryBuild' absTarget
       where
         tryBuild' :: Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
-        tryBuild' absTarget = do lckFileName <- getLockFile absTarget
+        tryBuild' absTarget = do lckFileName <- getTargetLockFile absTarget
                                  maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild' absTarget) 
                                    =<< tryLockFile lckFileName Exclusive
         runBuild' :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
@@ -217,7 +217,7 @@ buildTargets buildFunc targets = do
     runBuild :: JobServerHandle -> Target -> IO ExitCode
     runBuild handle target = do
       absTarget <- Target <$> canonicalizePath' (unTarget target)
-      lckFileName <- getLockFile absTarget
+      lckFileName <- getTargetLockFile absTarget
       maybe (waitBuild handle (absTarget, lckFileName)) (runBuildWithLock absTarget) 
         =<< tryLockFile lckFileName Exclusive
 

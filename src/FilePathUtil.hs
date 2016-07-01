@@ -2,7 +2,7 @@
 {-# LANGUAGE CPP #-}
 
 module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursive, safeCreateDirectoryRecursive,
-                    safeRemoveGlob, removeDotDirs, escapeFilePath, unescapeFilePath) where
+                    safeRemoveGlob, removeDotDirs, escapeFilePath, unescapeFilePath, pathify, unpathify) where
 
 import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
@@ -89,3 +89,14 @@ safeRemoveDirectoryRecursive dir = catch (removeDirectoryRecursive dir) (\(_ :: 
 -- Create a directory recursively withoutc complaining if it already exists:
 safeCreateDirectoryRecursive :: FilePath -> IO ()
 safeCreateDirectoryRecursive dir = catch (createDirectoryIfMissing True dir) (\(_ :: SomeException) -> return ())
+
+-- Take a flat path and split by path seperators n times
+pathify :: Int -> FilePath -> FilePath
+pathify _ "" = ""
+pathify n string = x </> pathify (n+n) xs
+  where (x,xs) = splitAt n string
+
+-- Take a path with path separators and remove the path separators:
+unpathify :: FilePath -> FilePath
+unpathify "" = ""
+unpathify (x:xs) = if isPathSeparator x then unpathify xs else x:unpathify xs
