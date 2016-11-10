@@ -1,6 +1,6 @@
 module DatabaseEntry(Entry(..), doesEntryExist, removeEntry, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
 
-import System.Directory (getDirectoryContents, doesDirectoryExist)
+import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath ((</>))
 
 import FilePathUtil
@@ -48,13 +48,12 @@ appendEntry entry contents =
 -- Read the first value of the entry
 readEntry1 :: Entry -> IO String
 readEntry1 entry = do
-  contents <- getDirectoryContents entry'
-  return $ contents !! 2
+  contents <- listDirectory entry'
+  return $ contents !! 0
   where entry' = entryToFilePath entry
 
 -- Read all of the values from an entry
 readEntry :: Entry -> IO [String]
 readEntry entry = do
-  contents <- getDirectoryContents entry'
-  return $ drop 2 contents
+  listDirectory entry'
   where entry' = entryToFilePath entry
