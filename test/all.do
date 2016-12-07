@@ -9,6 +9,7 @@ fi
 # builds 1xx*/all
 /bin/ls 1[0-9][0-9]*/all.do |
 sed 's/\.do$//' |
+sed 's@103-unicode/all@@1' |
 sed 's@121-defaults-nested/all@@1' |
 xargs redo
 110-compile/hello >&2
@@ -18,4 +19,5 @@ xargs redo
 sed 's/\.do$//' |
 sed 's@660-stamp/all@@1' |
 sed 's@999-installer/all@@1' |
+sed 's@200-shell/all@@1' |
 xargs redo-ifchange

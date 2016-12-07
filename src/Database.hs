@@ -37,11 +37,17 @@ newtype TempKey = TempKey { tempKeyToFilePath :: FilePath } deriving (Show, Eq) 
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
+getUsername :: IO String
+getUsername = do catch (getEnv "USERNAME") 
+                   (\(_ :: SomeException) -> catch (getEnv "USER") 
+                     (\(_ :: SomeException) -> getEnv "REDO_SESSION" ))
+
 -- Directory for storing temporary data:
 redoTempDirectory :: IO FilePath
 redoTempDirectory = do base <- getTemporaryDirectory
                        session <- getEnv "REDO_SESSION"
-                       return $ base </> "redo" </> session
+                       user <- getUsername
+                       return $ base </> "redo-" ++ user </> session
 
 -- Directory for storing dependency database entries for redo targets and sources
 redoDatabaseDirectory :: IO FilePath

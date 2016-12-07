@@ -6,6 +6,6 @@ then
   TMPDIR=/tmp
 fi
 
-rm -rf $TMPDIR/redo/*/cache/*
-rm -rf $TMPDIR/redo/*/db_locks/*
-rm -rf $TMPDIR/redo/*/target_locks/*
+rm -rf $TMPDIR/redo-$USER/*/cache/*
+rm -rf $TMPDIR/redo-$USER/*/db_locks/*
+rm -rf $TMPDIR/redo-$USER/*/target_locks/*
