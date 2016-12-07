@@ -3,7 +3,6 @@
 module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, JobServerHandle,
                   waitOnJob, runJob, tryWaitOnJob, returnToken, getToken, Token(..)) where
 
-import Control.Applicative ((<$>))
 import Control.Exception.Base (assert)
 import Control.Exception (catch, SomeException(..))
 import Foreign.C.Types (CInt)

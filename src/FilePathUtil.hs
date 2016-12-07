@@ -4,7 +4,6 @@
 module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursive, safeCreateDirectoryRecursive,
                     safeRemoveGlob, removeDotDirs, escapeFilePath, unescapeFilePath, pathify, unpathify) where
 
-import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException(..))
 import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, pathSeparator)
 import System.FilePath.Glob (globDir1, compile)

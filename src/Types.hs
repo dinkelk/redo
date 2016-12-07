@@ -2,7 +2,6 @@
 
 module Types(stampTarget, safeStampTarget, doesTargetExist, doesDoFileExist, findDoFile, Stamp(..), DoFile(..), Target(..)) where
 
-import Control.Applicative ((<$>),(<*>))
 import Control.Exception (catch, SomeException(..))
 import Control.Monad (liftM, filterM)
 import Data.Bool (bool)

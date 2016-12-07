@@ -4,7 +4,6 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
              storeAlwaysDependency) where
 
 -- System imports:
-import Control.Applicative ((<$>))
 import Control.Monad (when)
 import Control.Exception (catch, SomeException(..))
 import Data.Either (rights, lefts, isRight)
