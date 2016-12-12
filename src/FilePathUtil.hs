@@ -2,11 +2,10 @@
 {-# LANGUAGE CPP #-}
 
 module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursive, safeCreateDirectoryRecursive,
-                    safeRemoveGlob, removeDotDirs, escapeFilePath, unescapeFilePath, pathify, unpathify) where
+                    removeDotDirs, escapeFilePath, unescapeFilePath, pathify, unpathify) where
 
 import Control.Exception (catch, SomeException(..))
 import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, pathSeparator)
-import System.FilePath.Glob (globDir1, compile)
 import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
 
 -- This module provides some basic file path handling for redo
@@ -75,11 +74,6 @@ makeRelative' filePath1 filePath2 = if numParentDirs >= 0 then joinPath (replica
 -- not a necessary feature for redo, and it just slows us down.
 canonicalizePath' :: FilePath -> IO FilePath
 canonicalizePath' path = removeDotDirs <$> makeAbsolute path
-
--- Remove files that match a globString, ie. "*.txt":
-safeRemoveGlob :: FilePath -> String -> IO ()
-safeRemoveGlob directory globString = mapM_ safeRemove =<< globDir1 (compile globString) directory
-  where safeRemove file = catch (removeFile file) (\(_ :: SomeException) -> return ())
 
 -- Remove a directory recursively without complaining if it exists or not:
 safeRemoveDirectoryRecursive :: FilePath -> IO ()

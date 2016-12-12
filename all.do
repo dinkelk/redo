@@ -24,23 +24,14 @@ check_exit()
   fi
 }
 
-# Make sure the user has cabal and ghc installed:
+# Make sure the user has stack installed:
 ercho
-ercho "Making sure ghc and cabal are installed..."
-check_dependency "ghc"
-check_dependency "cabal"
+ercho "Making sure haskell stack (haskellstack.org) is installed..."
+check_dependency "stack"
 ercho
 
-# Make sure cabal dependencies are installed:
-# Don't mess with the users local haskell installation:
-ercho "Creating a cabal sandbox to store the redo dependencies..."
-cabal sandbox init >&2
-check_exit
-ercho
-ercho "Installing the redo dependencies..."
-cabal install --dependencies-only >&2
-check_exit
-ercho
+# Run stack build:
+stack setup
 
 # Run the source building and installation:
 ercho "Building redo..."
@@ -49,4 +40,3 @@ redo src/all
 # Print success:
 ercho
 ercho "Install complete - redo binaries installed in 'bin/'"
-
