@@ -23,3 +23,4 @@ prof
 todo
 src/ghci.sh
 cabal.config
+.stack-work
