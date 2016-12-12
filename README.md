@@ -10,16 +10,13 @@ I intend to continue maintaining and improving this implementation of `redo` for
 
 ## Installation
 
-To install redo, first make sure you have [GHC](https://www.haskell.org/ghc/) and [cabal](https://www.haskell.org/cabal/download.html) installed. The easiest way is to just install the whole [Haskell Platform](https://www.haskell.org/platform/).
+To install redo, first make sure you have the [Haskell Tool Stack](https://docs.haskellstack.org/en/stable/install_and_upgrade/) installed.
 
 Next, clone this repository and run:
 
-    cabal update
     ./do
 
 in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, `redo-ifcreate`, and `redo-always` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
-
-**Note:** The installation will create a [cabal sandbox](https://www.haskell.org/cabal/users-guide/installing-packages.html#sandboxes-basic-usage) in the root directory. This is to prevent `redo`'s dependencies from conflicting with your native cabal packages. If you would rather install all of `redo`'s dependencies globally, edit the `all.do` script appropriately before running `./do`.
 
 ## Usage
 
