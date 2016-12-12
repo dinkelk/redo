@@ -6,7 +6,7 @@ module FilePathUtil(makeRelative', canonicalizePath', safeRemoveDirectoryRecursi
 
 import Control.Exception (catch, SomeException(..))
 import System.FilePath (joinPath, splitDirectories, (</>), isPathSeparator, pathSeparator)
-import System.Directory (removeFile, makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
+import System.Directory (makeAbsolute, removeDirectoryRecursive, createDirectoryIfMissing)
 
 -- This module provides some basic file path handling for redo
 ---------------------------------------------------------------------
