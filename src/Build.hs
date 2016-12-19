@@ -10,7 +10,7 @@ import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
 import Data.Bool (bool)
-import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory)
+import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory, copyFile)
 import System.Environment (getEnvironment, lookupEnv, getEnv)
 import System.Exit (ExitCode(..))
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
@@ -18,6 +18,7 @@ import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, tak
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import System.Posix.Types (ProcessID)
+import System.File.Tree (getDirectory, copyTo_)
 
 -- Local imports:
 import Types
@@ -393,10 +394,23 @@ runDoFile key tempKey target currentTimeStamp doFile = do
       where safeRenameFile :: FilePath -> Target -> IO ()
             safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
             safeRenameFileOrDir :: FilePath -> Target -> IO () 
-            safeRenameFileOrDir old new = catch(renameFile old (unTarget new)) 
-              -- we need to remove the directory because renameDirectory does not overwrite on all platforms
-              (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)                                                  
-                                                 renameDirectory old (unTarget new) ) (\(_ :: SomeException) -> return ()))
+            safeRenameFileOrDir old new = catch (renameFile old (unTarget new)) 
+              -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
+              (\(_ :: SomeException) -> catch (copyFile old (unTarget new)) -- No need to delete, since this is all stored in tmp
+              -- Handle directory moving...
+              -- We need to remove the directory first because renameDirectory does not overwrite on all platforms
+                (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)
+                                                   renameDirectory old (unTarget new) ) 
+              -- That didn't work either, copy directory recursively
+                  (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)
+                                                     copyDirectory old (unTarget new) ) 
+                    (\(_ :: SomeException) -> return ())
+                  )
+                )
+              )
+            --safeRenameFileOrDir old new = copyFile old (unTarget new)
+            copyDirectory :: FilePath -> FilePath -> IO ()
+            copyDirectory from to = getDirectory from >>= copyTo_ to 
     
     -- Error messages for improper use of redo:
     wroteToStdoutError :: IO ()
