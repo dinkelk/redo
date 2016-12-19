@@ -16,7 +16,7 @@ cabal-version:       >=1.10
 
 executable redo-haskell
   main-is:             Main.hs
-  other-modules:  Build Database DatabaseEntry FilePathUtil JobServer PrettyPrint Types UpToDate
+  other-modules:       Build, Database, DatabaseEntry, FilePathUtil, JobServer, PrettyPrint, Types, UpToDate
   other-extensions:    StandaloneDeriving, ScopedTypeVariables, CPP
   build-depends:       base, containers, directory, filepath, process, time, bytestring, unix, cryptohash, hex, ansi-terminal, random, filelock
   hs-source-dirs:      src

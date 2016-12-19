@@ -30,10 +30,13 @@ ercho "Making sure haskell stack (haskellstack.org) is installed..."
 check_dependency "stack"
 ercho
 
-# Run stack build:
+# Install GHC:
 stack setup
 
-# Run the source building and installation:
+# Install and build package dependencies
+stack build
+
+# Build redo and install it locally in ./bin:
 ercho "Building redo..."
 redo src/all
 
