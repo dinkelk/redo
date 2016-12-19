@@ -49,11 +49,10 @@ appendEntry entry contents =
 readEntry1 :: Entry -> IO String
 readEntry1 entry = do
   contents <- listDirectory entry'
-  return $ contents !! 0
+  return $ head contents
   where entry' = entryToFilePath entry
 
 -- Read all of the values from an entry
 readEntry :: Entry -> IO [String]
-readEntry entry = do
-  listDirectory entry'
+readEntry entry = listDirectory entry'
   where entry' = entryToFilePath entry
