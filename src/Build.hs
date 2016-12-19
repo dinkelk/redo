@@ -281,12 +281,14 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   shellArgs' <- lookupEnv "REDO_SHELL_ARGS"           -- Shell args passed to initial invokation of redo
   redoInitPath' <- lookupEnv "REDO_INIT_PATH"         -- Path where redo was initially invoked
   sessionNumber' <- lookupEnv "REDO_SESSION"          -- Unique number to define this session
-  noColor' <- lookupEnv "REDO_NO_COLOR"                -- Disable color printed redo status
-  dashD' <- lookupEnv "REDO_DEBUG"                -- Disable color printed redo status
+  noColor' <- lookupEnv "REDO_NO_COLOR"               -- Disable color printed redo status
+  dashD1' <- lookupEnv "REDO_DEBUG_1"                 -- Debug flag 1
+  dashD2' <- lookupEnv "REDO_DEBUG_2"                 -- Debug flag 2
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
-  let dashD = fromMaybe "" dashD'
+  let dashD1 = fromMaybe "" dashD1'
+  let dashD2 = fromMaybe "" dashD2'
   let noColor = fromMaybe "" noColor'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
@@ -302,7 +304,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 
   -- Print what we are currently "redoing"
   putRedoInfo target
-  when (not (null shellArgs) || not (null dashD)) (putUnformattedStrLn $ "* " ++ cmd)
+  when (not (null shellArgs) || not (null dashD1)) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the target database:
   initializeTargetDatabase key doFile
@@ -318,7 +320,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
                       $ insert "REDO_NO_COLOR" noColor
-                      $ insert "REDO_DEBUG" dashD
+                      $ insert "REDO_DEBUG_1" dashD1
+                      $ insert "REDO_DEBUG_2" dashD2
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_KEY" (keyToFilePath key)

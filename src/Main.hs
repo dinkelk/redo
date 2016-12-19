@@ -22,7 +22,8 @@ data Options = Options {
   help :: Bool,
   dashX :: Bool,
   dashV :: Bool,
-  dashD :: Bool,
+  dashD1 :: Bool,
+  dashD2 :: Bool,
   keepGoing :: Bool,
   jobs :: Int,
   shuffle :: Bool,
@@ -35,7 +36,8 @@ defaultOptions = Options {
   help = False,
   dashX = False,
   dashV = False,
-  dashD = False,
+  dashD1 = False,
+  dashD2 = False,
   keepGoing = False,
   jobs = 1,
   shuffle = False,
@@ -54,7 +56,8 @@ options =
   , Option ['h','H']  ["help"]        (NoArg setHelp)                "show usage details"
   , Option ['x']      ["xtrace"]      (NoArg setDashX)               "print commands as they are executed with variables expanded"
   , Option ['v']      ["verbose"]     (NoArg setDashV)               "print commands as they are read from .do files"
-  , Option ['d']      ["debug"]       (NoArg setDashD)               "print all shell calls of .do files"
+  , Option ['d']      ["debug1"]      (NoArg setDashD1)              "print all .do file calls by redo"
+  , Option ['D']      ["debug2"]      (NoArg setDashD2)              "print all calls to redo before they are executed"
   , Option ['V','?']  ["version"]     (NoArg printVersion)           "print the version number"
   , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)           "keep building even if some targets fail"
   , Option ['s']      ["shuffle"]     (NoArg setShuffle)             "randomize the build order to find dependency bugs"
@@ -74,8 +77,11 @@ setDashX opt = return opt { dashX = True }
 setDashV :: Options -> IO Options
 setDashV opt = return opt { dashV = True }
 
-setDashD :: Options -> IO Options
-setDashD opt = return opt { dashD = True }
+setDashD1 :: Options -> IO Options
+setDashD1 opt = return opt { dashD1 = True }
+
+setDashD2 :: Options -> IO Options
+setDashD2 opt = return opt { dashD2 = True }
 
 setKeepGoing :: Options -> IO Options
 setKeepGoing opt = return opt { keepGoing = True }
@@ -121,18 +127,23 @@ main = do
   let Options { help = help', 
                 dashX = dashX',
                 dashV = dashV',
-                dashD = dashD',
+                dashD1 = dashD1',
+                dashD2 = dashD2',
                 keepGoing = keepGoing',
                 jobs = jobs',
                 shuffle = shuffle',
                 noColor = noColor'} = opts
+
+  -- Get targets to run:
+  targetsToRun' <- targetsToRun targets
 
   -- Show help or version information if asked:
   when help' (printHelp progName options [])
   when keepGoing' (setEnv "REDO_KEEP_GOING" "TRUE")
   when shuffle' (setEnv "REDO_SHUFFLE" "TRUE")
   when noColor' (setEnv "REDO_NO_COLOR" "TRUE")
-  when dashD' (setEnv "REDO_DEBUG" "TRUE")
+  when dashD1' (setEnv "REDO_DEBUG_1" "TRUE")
+  when dashD2' (setEnv "REDO_DEBUG_2" "TRUE")
 
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.
@@ -144,9 +155,14 @@ main = do
   redoInitPath <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
 
+  -- Print debug2 info if requested:
+  debug2Flag <- lookupEnv "REDO_DEBUG_2"
+  let debug2 = fromMaybe "" debug2Flag
+  when (not (null debug2)) (putUnformattedStrLn $ progName ++ " " ++ unwords (map (unTarget) targetsToRun') )
+
   -- Run the main:
   mainToRun' <- mainToRun jobs'
-  mainToRun' progName =<< targetsToRun targets
+  mainToRun' progName targetsToRun'
   where
     -- Shuffle the targets if required:
     targetsToRun targets = do shuffleTargets' <- lookupEnv "REDO_SHUFFLE"
