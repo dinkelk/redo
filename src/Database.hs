@@ -38,9 +38,10 @@ redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
 getUsername :: IO String
-getUsername = do catch (getEnv "USERNAME") 
-                   (\(_ :: SomeException) -> catch (getEnv "USER") 
-                     (\(_ :: SomeException) -> getEnv "REDO_SESSION" ))
+getUsername = catch (getEnv "USERNAME") 
+                (\(_ :: SomeException) -> catch (getEnv "USER") 
+                  (\(_ :: SomeException) -> getEnv "REDO_SESSION" )
+                )
 
 -- Directory for storing temporary data:
 redoTempDirectory :: IO FilePath
