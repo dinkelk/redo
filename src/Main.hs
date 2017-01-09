@@ -134,9 +134,6 @@ main = do
                 shuffle = shuffle',
                 noColor = noColor'} = opts
 
-  -- Get targets to run:
-  targetsToRun' <- targetsToRun targets
-
   -- Show help or version information if asked:
   when help' (printHelp progName options [])
   when keepGoing' (setEnv "REDO_KEEP_GOING" "TRUE")
@@ -154,6 +151,9 @@ main = do
   -- Set the redo path variable to the current directory for the first call:
   redoInitPath <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
   when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
+
+  -- Get targets to run:
+  targetsToRun' <- targetsToRun targets
 
   -- Print debug2 info if requested:
   debug2Flag <- lookupEnv "REDO_DEBUG_2"
