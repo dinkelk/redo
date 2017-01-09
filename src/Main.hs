@@ -158,7 +158,7 @@ main = do
   -- Print debug2 info if requested:
   debug2Flag <- lookupEnv "REDO_DEBUG_2"
   let debug2 = fromMaybe "" debug2Flag
-  when (not (null debug2)) (putUnformattedStrLn $ progName ++ " " ++ unwords (map (unTarget) targetsToRun') )
+  unless (null debug2) (putUnformattedStrLn $ progName ++ " " ++ unwords (map unTarget targetsToRun') )
 
   -- Run the main:
   mainToRun' <- mainToRun jobs'
