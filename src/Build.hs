@@ -5,7 +5,7 @@ module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, sto
 
 -- System imports:
 import Control.Monad (when)
-import Control.Exception (catch, SomeException(..))
+import Control.Exception (catch, SomeException(..), displayException)
 import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
@@ -375,7 +375,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
           safeRenameFileOrDir tmp3 target
           if stdoutExists && stdoutSize > 0 then wroteToStdoutError >> return 1 else return 0
         else if stdoutExists then
-          -- If the user actually wrote data to standard out or built a directory on $1 then we just try to rename the file,
+          -- If the user actually wrote data to stdout or built a directory on $1 then we just try to rename the file,
           -- and we leave a directory written on $1 alone.
           if stdoutSize > 0 || targetIsStillDirectory then safeRenameFile tmpStdout target >> return 0
           -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
@@ -396,24 +396,23 @@ runDoFile key tempKey target currentTimeStamp doFile = do
         else storePhonyTarget key >> return 0
       where safeRenameFile :: FilePath -> Target -> IO ()
             safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
-            safeRenameFileOrDir :: FilePath -> Target -> IO () 
-            safeRenameFileOrDir old new = catch (renameFile old (unTarget new)) 
-              -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
-              (\(_ :: SomeException) -> catch (copyFile old (unTarget new)) -- No need to delete, since this is all stored in tmp
-              -- Handle directory moving...
-              -- We need to remove the directory first because renameDirectory does not overwrite on all platforms
-                (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)
-                                                   renameDirectory old (unTarget new) ) 
-              -- That didn't work either, copy directory recursively
-                  (\(_ :: SomeException) -> catch(do safeRemoveDirectoryRecursive (unTarget new)
-                                                     copyDirectory old (unTarget new) ) 
-                    (\(_ :: SomeException) -> return ())
-                  )
-                )
-              )
-            --safeRenameFileOrDir old new = copyFile old (unTarget new)
             copyDirectory :: FilePath -> FilePath -> IO ()
             copyDirectory from to = getDirectory from >>= copyTo_ to 
+            safeRenameFileOrDir :: FilePath -> Target -> IO () 
+            safeRenameFileOrDir old new = do
+              isDir <- doesDirectoryExist old
+              -- Handle directory moving...
+              -- We need to remove the directory first because renameDirectory does not overwrite on all platforms
+              catch (
+                if isDir then catch (do safeRemoveDirectoryRecursive (unTarget new)
+                                        renameDirectory old (unTarget new) ) 
+                  (\(_ :: SomeException) -> do safeRemoveDirectoryRecursive (unTarget new)
+                                               copyDirectory old (unTarget new) )
+                else catch (renameFile old (unTarget new)) 
+                  -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
+                  -- No need to delete, since this is all stored in tmp
+                  (\(_ :: SomeException) -> copyFile old (unTarget new) ) )
+                (\(e :: SomeException) -> copyError e)
     
     -- Error messages for improper use of redo:
     wroteToStdoutError :: IO ()
@@ -424,6 +423,9 @@ runDoFile key tempKey target currentTimeStamp doFile = do
     dollarOneModifiedError = putErrorStrLn $ 
       "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
       "You should update $3 (the temporary file) or stdout, not $1." 
+    copyError :: SomeException -> IO ()
+    copyError ex = putErrorStrLn $
+      "Error: Unable to move built target to location '" ++ unTarget target ++ "': " ++ displayException ex
 
 -- Pass redo script 3 arguments:
 -- $1 - the target name
