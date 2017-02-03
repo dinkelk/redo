@@ -371,31 +371,38 @@ runDoFile key tempKey target currentTimeStamp doFile = do
       if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then 
         dollarOneModifiedError >> return 1
       else 
+        -- If $3 was written to then move it to the proper location. Throw an error is stdout was
+        -- written to as well.
         if tmp3Exists then do
           safeRenameFileOrDir tmp3 target
           if stdoutExists && stdoutSize > 0 then wroteToStdoutError >> return 1 else return 0
-        else if stdoutExists then
-          -- If the user actually wrote data to stdout or built a directory on $1 then we just try to rename the file,
-          -- and we leave a directory written on $1 alone.
-          if stdoutSize > 0 || targetIsStillDirectory then safeRenameFile tmpStdout target >> return 0
-          -- The else statement is a bit confusing, and is used to be compatible with apenwarr's implementation
-          -- Basically, if the stdout temp file has a size of zero, we should remove the target, because no
-          -- target should be created. This is our way of denoting the file as correctly build! 
-          -- Usually this target won't exist anyways, but it might exist in the case
-          -- of a modified .do file that was generating something, and now is not! In this case we remove the 
-          -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
-          ------------------------------------------------------------------------------------------------------
-          -- Note: in this case a stdout file size of 0 was created. This is the default
-          -- behavior on some systems for ">"-ing a file that generatetes
-          -- no stdout. In this case, lets not clutter the directory, and
-          -- instead store a phony target in the meta directory
-          else do safeRemoveTempFile $ unTarget target
-                  storePhonyTarget key
-                  return 0
-        -- Neither temp file was created. This must be a phony target. Let's create it in the meta directory.
+        -- If stdout was written to then move it to the proper location.
+        else if stdoutExists && stdoutSize > 0 then safeRenameFile tmpStdout target >> return 0
+        -- If a directory at the target was created, then we don't need to move anything.
+        -- Note: This check should definitely be after checking for $3 and stdout since if a
+        -- directory exists, but $3 or stdout was written to, then we will have an error copying
+        -- over the target. We want to make sure to throw this error to the user.
+        else if targetIsStillDirectory then return 0
+        -- The else if statement is a bit confusing, and is used to be compatible with apenwarr's implementation
+        -- Basically, if the stdout temp file has a size of zero, we should remove it, because no
+        -- target should be created. This is our way of denoting the file as correctly built.
+        -- Usually this target won't exist anyways, but it might exist in the case
+        -- of a modified .do file that was generating something, and now is not! In this case we remove the 
+        -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
+        ------------------------------------------------------------------------------------------------------
+        -- Note: in this case a stdout file size of 0 was created. This is the default
+        -- behavior on some systems for ">"-ing a file that generatetes
+        -- no stdout. In this case, lets not clutter the directory, and
+        -- instead store a phony target in the meta directory
+        else if stdoutExists then safeRemoveTempFile (unTarget target) >> storePhonyTarget key >> return 0
+        -- Neither temp file was created, and no directory was created with the target's name, thus,
+        -- this must be a phony target. Let's create it in the meta directory.
         else storePhonyTarget key >> return 0
       where safeRenameFile :: FilePath -> Target -> IO ()
-            safeRenameFile old new = catch (renameFile old (unTarget new)) (\(_ :: SomeException) -> return ())
+            safeRenameFile old new = catch (renameFile old (unTarget new)) 
+              -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
+              -- No need to delete, since this is all stored in tmp
+              (\(_ :: SomeException) -> copyFile old (unTarget new) )
             copyDirectory :: FilePath -> FilePath -> IO ()
             copyDirectory from to = getDirectory from >>= copyTo_ to 
             safeRenameFileOrDir :: FilePath -> Target -> IO () 
@@ -408,10 +415,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                                         renameDirectory old (unTarget new) ) 
                   (\(_ :: SomeException) -> do safeRemoveDirectoryRecursive (unTarget new)
                                                copyDirectory old (unTarget new) )
-                else catch (renameFile old (unTarget new)) 
-                  -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
-                  -- No need to delete, since this is all stored in tmp
-                  (\(_ :: SomeException) -> copyFile old (unTarget new) ) )
+                else safeRenameFile old new)
                 (\(e :: SomeException) -> copyError e)
     
     -- Error messages for improper use of redo:
