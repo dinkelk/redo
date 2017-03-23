@@ -24,6 +24,7 @@ data Options = Options {
   dashV :: Bool,
   dashD1 :: Bool,
   dashD2 :: Bool,
+  dashC :: Bool,
   keepGoing :: Bool,
   jobs :: Int,
   shuffle :: Bool,
@@ -38,6 +39,7 @@ defaultOptions = Options {
   dashV = False,
   dashD1 = False,
   dashD2 = False,
+  dashC = False,
   keepGoing = False,
   jobs = 1,
   shuffle = False,
@@ -58,6 +60,7 @@ options =
   , Option ['v']      ["verbose"]     (NoArg setDashV)               "print commands as they are read from .do files"
   , Option ['d']      ["debug1"]      (NoArg setDashD1)              "print all .do file calls by redo"
   , Option ['D']      ["debug2"]      (NoArg setDashD2)              "print all calls to redo before they are executed"
+  , Option ['c']      ["check"]       (NoArg setDashC)               "print all checks that redo performs to determine if target is up to date"
   , Option ['V','?']  ["version"]     (NoArg printVersion)           "print the version number"
   , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)           "keep building even if some targets fail"
   , Option ['s']      ["shuffle"]     (NoArg setShuffle)             "randomize the build order to find dependency bugs"
@@ -82,6 +85,9 @@ setDashD1 opt = return opt { dashD1 = True }
 
 setDashD2 :: Options -> IO Options
 setDashD2 opt = return opt { dashD2 = True }
+
+setDashC :: Options -> IO Options
+setDashC opt = return opt { dashC = True }
 
 setKeepGoing :: Options -> IO Options
 setKeepGoing opt = return opt { keepGoing = True }
@@ -129,6 +135,7 @@ main = do
                 dashV = dashV',
                 dashD1 = dashD1',
                 dashD2 = dashD2',
+                dashC = dashC',
                 keepGoing = keepGoing',
                 jobs = jobs',
                 shuffle = shuffle',
@@ -141,6 +148,7 @@ main = do
   when noColor' (setEnv "REDO_NO_COLOR" "TRUE")
   when dashD1' (setEnv "REDO_DEBUG_1" "TRUE")
   when dashD2' (setEnv "REDO_DEBUG_2" "TRUE")
+  when dashC' (setEnv "REDO_CHECK" "TRUE")
 
   -- If there are shell args, set an environment variable that can be used by all
   -- redo calls after this.

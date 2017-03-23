@@ -120,7 +120,9 @@ redoIfChange = buildTargets redoIfChange'
           modified <- isTargetModified key currentStamp
           if modified then targetModifiedWarning target
           else do
-            upToDate' <- upToDate key tempKey target
+            debugCheckFlag <- lookupEnv "REDO_CHECK"
+            let debugCheck = fromMaybe "" debugCheckFlag
+            upToDate' <- upToDate (not (null debugCheck)) key tempKey target
             -- Try to run redo if out of date, if it fails, print an error message:
             unless' upToDate' (maybe (missingDo key target) (runDoFile key tempKey target currentStamp) =<< findDoFile target)
       where key = getKey target
@@ -284,11 +286,13 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   noColor' <- lookupEnv "REDO_NO_COLOR"               -- Disable color printed redo status
   dashD1' <- lookupEnv "REDO_DEBUG_1"                 -- Debug flag 1
   dashD2' <- lookupEnv "REDO_DEBUG_2"                 -- Debug flag 2
+  dashC' <- lookupEnv "REDO_CHECK"                    -- Check flag
   let redoInitPath = fromJust redoInitPath'           -- this should always be set from the first run of redo
   let redoDepth = show $ if isNothing redoDepth' then 0 else (read (fromJust redoDepth') :: Int) + 1
   let shellArgs = fromMaybe "" shellArgs'
   let dashD1 = fromMaybe "" dashD1'
   let dashD2 = fromMaybe "" dashD2'
+  let dashC = fromMaybe "" dashC'
   let noColor = fromMaybe "" noColor'
   let keepGoing = fromMaybe "" keepGoing'
   let shuffleDeps = fromMaybe "" shuffleDeps'
@@ -322,6 +326,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_NO_COLOR" noColor
                       $ insert "REDO_DEBUG_1" dashD1
                       $ insert "REDO_DEBUG_2" dashD2
+                      $ insert "REDO_CHECK" dashC
                       $ insert "REDO_DEPTH" redoDepth
                       $ insert "REDO_INIT_PATH" redoInitPath 
                       $ insert "REDO_KEY" (keyToFilePath key)

@@ -12,10 +12,11 @@ import Database
 ---------------------------------------------------------------------
 -- Debug helpers:
 ---------------------------------------------------------------------
---import Debug.Trace (trace)
+import Debug.Trace (trace)
+--debug :: c -> String -> c
+--debug a _ = a
 debug :: c -> String -> c
-debug a _ = a
---debug = flip trace
+debug = flip trace
 
 ---------------------------------------------------------------------
 -- Functions checking if a target or its dependencies are up to date
@@ -23,16 +24,16 @@ debug a _ = a
 -- Top upToDate which should be called by redo-ifchange. Return true if a file is clean and does
 -- not need to be built. Return false if a file is dirty and needs to be rebuilt.
 -- Note: target must be the absolute canonicalized path to the target.
-upToDate :: Key -> TempKey -> Target -> IO Bool
+upToDate :: Bool -> Key -> TempKey -> Target -> IO Bool
 upToDate = upToDate'' 0
 
 -- Up to date function when the level is already known:
-upToDate' :: Int -> Target -> IO Bool
-upToDate' level target = upToDate'' level (getKey target) (getTempKey target) target
+upToDate' :: Int -> Bool -> Target -> IO Bool
+upToDate' level doDebug target = upToDate'' level doDebug (getKey target) (getTempKey target) target
 
 -- Up to date function when the level and target keys are already known:
-upToDate'' :: Int -> Key -> TempKey -> Target -> IO Bool
-upToDate'' level key tempKey target = do
+upToDate'' :: Int -> Bool -> Key -> TempKey -> Target -> IO Bool
+upToDate'' level doDebug key tempKey target = do
   return () `debug'` "=checking"
   databaseExists <- doesDatabaseExist key
   -- If there is no database for this target and it doesn't exist than it has never been built, or it is
@@ -65,11 +66,11 @@ upToDate'' level key tempKey target = do
            -- The target has been modified because the timestamps dont match
            if cachedStamp /= currentStamp then returnFalse `debug'` "-modified"
            else do 
-             ret <- upToDate''' level target key
+             ret <- upToDate''' level doDebug target key
              if ret then returnTrue else returnFalse
   where
     -- Convenient debug function:
-    debug' = debugUpToDate level target
+    debug' status string = if doDebug then debugUpToDate level target status string else status
     -- Helper function which returns true and marks the target as clean:
     returnTrue :: IO Bool
     returnTrue = markClean tempKey >> return True
@@ -80,8 +81,8 @@ upToDate'' level key tempKey target = do
 -- A continuation of UpToDate''. This function checks if the target is a source 
 -- file or if a new do file was found or removed. Finally it checks to see if the
 -- target's dependencies are up to date:
-upToDate''' :: Int -> Target -> Key -> IO Bool
-upToDate''' level target key = do
+upToDate''' :: Int -> Bool -> Target -> Key -> IO Bool
+upToDate''' level doDebug target key = do
   source <- isSource key  
   if source then return True `debug'` "+source"
   else do
@@ -95,9 +96,9 @@ upToDate''' level target key = do
       -- If the target exists but a new do file was found for it then we need to rebuilt it, so
       -- it is not up to date.
       if newDo then return False `debug'` "-new do"
-      else depsUpToDate (level+1) target key
+      else depsUpToDate (level+1) target key doDebug
   where 
-    debug' = debugUpToDate level target
+    debug' status string = if doDebug then debugUpToDate level target status string else status
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: DoFile -> IO Bool
     newDoFile doFile =
@@ -110,8 +111,8 @@ upToDate''' level target key = do
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
-depsUpToDate :: Int -> Target -> Key -> IO Bool
-depsUpToDate level target key = do
+depsUpToDate :: Int -> Target -> Key -> Bool -> IO Bool
+depsUpToDate level target key doDebug = do
   -- redo-always - if an always dependency exists, we need to return False immediately
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"
@@ -124,9 +125,9 @@ depsUpToDate level target key = do
       -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
       --                 then recursively check their dependencies to see if they are up to date
       ifChangeDeps <- getIfChangeDeps key
-      mapAnd (upToDate' (level+1)) ifChangeDeps 
+      mapAnd (upToDate' (level+1) doDebug) ifChangeDeps
   where 
-    debug' = debugUpToDate level target
+    debug' status string = if doDebug then debugUpToDate level target status string else status
 
 -- Helper for debugging:
 debugUpToDate :: Int -> Target -> c -> String -> c
