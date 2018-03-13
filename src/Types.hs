@@ -8,7 +8,8 @@ import Data.Bool (bool)
 import Data.Maybe (isNothing, listToMaybe)
 import System.Directory (doesFileExist, doesDirectoryExist)
 import System.FilePath (takeExtensions, dropExtension, dropExtensions, isDrive, splitFileName, (</>), takeDirectory, pathSeparator)
-import System.Posix.Files (getFileStatus, modificationTimeHiRes, fileID, fileSize)
+import System.Posix.Files (getFileStatus, modificationTimeHiRes)
+import Data.Time.Clock.POSIX (POSIXTime)
 
 import FilePathUtil
 
@@ -16,7 +17,7 @@ import FilePathUtil
 ---------------------------------------------------------------------
 -- Basic Redo Type Definitions:
 ---------------------------------------------------------------------
-newtype Stamp = Stamp { unStamp :: String } deriving (Show, Eq) -- Timestamp or hash stamp of a file
+newtype Stamp = Stamp { unStamp :: POSIXTime } deriving (Show, Eq, Ord) -- Timestamp or hash stamp of a file
 newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Show, Eq) -- The absolute path to a do file
 newtype Target = Target { unTarget :: FilePath } deriving (Show, Eq) -- The absolute path to a target file
 
@@ -32,11 +33,18 @@ stampTarget = getTimeStamp
 safeStampTarget :: Target -> IO (Maybe Stamp)
 safeStampTarget target = catch (Just <$> stampTarget target) (\(_ :: SomeException) -> return Nothing)
 
+-- Get the target timestamp (old version, now using real POSIXTime instead of string, below)
+-- newtype Stamp = Stamp { unStamp :: String } deriving (Show, Eq) -- Timestamp or hash stamp of a file
+-- getTimeStamp :: Target -> IO Stamp
+-- getTimeStamp target = do
+--   st <- getFileStatus $ unTarget target
+--   return $ Stamp $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
+
 -- Get the target timestamp
 getTimeStamp :: Target -> IO Stamp
 getTimeStamp target = do
   st <- getFileStatus $ unTarget target
-  return $ Stamp $ show (modificationTimeHiRes st) ++ show (fileID st) ++ show (fileSize st)
+  return $ Stamp $ modificationTimeHiRes st
 
 -- Hash the file (no longer supported, using timestamps for speed)
 -- getTargetHashStamp :: Target -> IO Stamp

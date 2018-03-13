@@ -272,7 +272,8 @@ storeDoFile' key doFile = do
 storeStamp' :: Key -> Stamp -> IO ()
 storeStamp' key stamp = do
   stampDir <- getStampEntry key
-  writeEntry stampDir (unStamp stamp)
+  writeEntry stampDir (show ratio)
+  where ratio = toRational $ unStamp stamp
 
 -- Mark a target as a source file in the cache:
 markSource' :: Key -> IO () 
@@ -385,7 +386,7 @@ getStamp key = withDatabaseLock key func
   where func = catch ( do
                  stampDir <- getStampEntry key
                  contents <- readEntry1 stampDir
-                 return $ Just $ Stamp contents)
+                 return $ Just $ Stamp $ fromRational (read contents :: Rational))
                (\(_ :: SomeException) -> return Nothing)
 
 -- Get the stored if create dependencies for a target:

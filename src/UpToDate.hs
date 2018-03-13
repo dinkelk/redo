@@ -25,15 +25,17 @@ debug = flip trace
 -- not need to be built. Return false if a file is dirty and needs to be rebuilt.
 -- Note: target must be the absolute canonicalized path to the target.
 upToDate :: Bool -> Key -> TempKey -> Target -> IO Bool
-upToDate = upToDate'' 0
+upToDate doDebug key tempKey target = do
+  topLevelStamp  <- getStamp key
+  upToDate'' 0 doDebug topLevelStamp key tempKey target
 
 -- Up to date function when the level is already known:
-upToDate' :: Int -> Bool -> Target -> IO Bool
-upToDate' level doDebug target = upToDate'' level doDebug (getKey target) (getTempKey target) target
+upToDate' :: Int -> Bool -> Maybe Stamp -> Target -> IO Bool
+upToDate' level doDebug topLevelStamp target = upToDate'' level doDebug topLevelStamp (getKey target) (getTempKey target) target
 
 -- Up to date function when the level and target keys are already known:
-upToDate'' :: Int -> Bool -> Key -> TempKey -> Target -> IO Bool
-upToDate'' level doDebug key tempKey target = do
+upToDate'' :: Int -> Bool -> Maybe Stamp -> Key -> TempKey -> Target -> IO Bool
+upToDate'' level doDebug topLevelStamp key tempKey target = do
   return () `debug'` "=checking"
   databaseExists <- doesDatabaseExist key
   -- If there is no database for this target and it doesn't exist than it has never been built, or it is
@@ -61,12 +63,15 @@ upToDate'' level doDebug key tempKey target = do
          -- If we have already checked off this target as dirty, don't delay, return not up to date
          if dirty then return False `debug'` "-dirty"
          else do 
-           cachedStamp <- getStamp key
-           currentStamp <- safeStampTarget (fromJust existingTarget)
-           -- The target has been modified because the timestamps dont match
-           if cachedStamp /= currentStamp then returnFalse `debug'` "-modified"
+           targetStamp <- safeStampTarget (fromJust existingTarget)
+           -- If the target stamp is greater (newer) than the top level stamp then the target
+           -- has been modified relative to the top level target.
+           -- NOTE: We do not mark this target as dirty. Just because it is newer than this top
+           -- level target, does not mean that it is newer than every future top level target
+           -- in subsequent instances of redo.
+           if targetStamp > topLevelStamp then return False `debug'` "-modified"
            else do 
-             ret <- upToDate''' level doDebug target key
+             ret <- upToDate''' level doDebug topLevelStamp target key 
              if ret then returnTrue else returnFalse
   where
     -- Convenient debug function:
@@ -81,22 +86,22 @@ upToDate'' level doDebug key tempKey target = do
 -- A continuation of UpToDate''. This function checks if the target is a source 
 -- file or if a new do file was found or removed. Finally it checks to see if the
 -- target's dependencies are up to date:
-upToDate''' :: Int -> Bool -> Target -> Key -> IO Bool
-upToDate''' level doDebug target key = do
+upToDate''' :: Int -> Bool -> Maybe Stamp -> Target -> Key -> IO Bool
+upToDate''' level doDebug topLevelStamp target key = do
   source <- isSource key  
   if source then return True `debug'` "+source"
   else do
     doFile <- findDoFile target
     -- If no do file is found, but the database exists, than this file used to be buildable, but is
     -- now a newly marked source file.
-    if isNothing doFile then return False `debug'` "+removed do"
+    if isNothing doFile then return False `debug'` "-removed do"
     else do
       let absDoFile = fromJust doFile
       newDo <- newDoFile absDoFile
       -- If the target exists but a new do file was found for it then we need to rebuilt it, so
       -- it is not up to date.
       if newDo then return False `debug'` "-new do"
-      else depsUpToDate (level+1) target key doDebug
+      else depsUpToDate (level+1) target key doDebug topLevelStamp
   where 
     debug' status string = if doDebug then debugUpToDate level target status string else status
     -- Does the target have a new do file from the last time it was built?
@@ -111,8 +116,8 @@ upToDate''' level doDebug target key = do
 -- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
-depsUpToDate :: Int -> Target -> Key -> Bool -> IO Bool
-depsUpToDate level target key doDebug = do
+depsUpToDate :: Int -> Target -> Key -> Bool -> Maybe Stamp -> IO Bool
+depsUpToDate level target key doDebug topLevelStamp = do
   -- redo-always - if an always dependency exists, we need to return False immediately
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"
@@ -125,7 +130,7 @@ depsUpToDate level target key doDebug = do
       -- redo-ifchange - check these files hashes against those stored to determine if they are up to date
       --                 then recursively check their dependencies to see if they are up to date
       ifChangeDeps <- getIfChangeDeps key
-      mapAnd (upToDate' (level+1) doDebug) ifChangeDeps
+      mapAnd (upToDate' (level+1) doDebug topLevelStamp) ifChangeDeps
   where 
     debug' status string = if doDebug then debugUpToDate level target status string else status
 
