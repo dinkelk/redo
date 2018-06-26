@@ -5,7 +5,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty, 
                  initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey, 
                  TempKey(..), Key(..), initializeSession, getTargetLockFile, getJobServerPipe, 
-                 getStdoutFile, getTempFile, markBuilt, isBuilt) where
+                 getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -154,6 +154,10 @@ getIfChangeEntry = getDatabaseEntry "r"
 -- Get the database entry for a target's ifcreate dependencies:
 getIfCreateEntry :: Key -> IO Entry
 getIfCreateEntry = getDatabaseEntry "c"
+
+-- Get the database entry for a target's ifcreate dependencies:
+getErroredEntry :: Key -> IO Entry
+getErroredEntry = getDatabaseEntry "e"
 
 -- Get the database entry for a target's always dependencies:
 getAlwaysEntry :: Key -> IO Entry 
@@ -413,6 +417,11 @@ getIfChangeDeps key = withDatabaseLock key func
                           (\(_ :: SomeException) -> return [])
                         convert = Target . unescapeFilePath
 
+-- Has the target been marked as errored in the database:
+isErrored :: Key -> IO Bool
+isErrored key = withDatabaseLock key func
+  where func = doesEntryExist =<< getErroredEntry key
+
 -- Has the target been marked clean in the cache?:
 isBuilt :: TempKey -> IO Bool 
 isBuilt key = withDatabaseLock' key func
@@ -480,6 +489,11 @@ storePhonyTarget :: Key -> IO ()
 storePhonyTarget key = withDatabaseLock key func
   where func = do phonyTargetDir <- getPhonyTargetEntry key
                   writeEntry phonyTargetDir (escapeFilePath ".")
+
+-- Mark a target as errored in the database:
+markErrored :: Key -> IO ()
+markErrored key = withDatabaseLock key func
+  where func = createEntry =<< getErroredEntry key
 
 -- Mark a target as built in the cache:
 markBuilt :: TempKey -> IO ()

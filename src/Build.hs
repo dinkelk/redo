@@ -340,7 +340,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       maybe (nonZeroExitStr exitCode) (stampBuiltTarget tmp3 tmpStdout)
                         =<< getBuiltTargetPath key target
                       bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
-    ExitFailure code -> do markDirty tempKey -- we failed to build this target, so mark it dirty
+    ExitFailure code -> do markErrored key   -- we failed to build this target, so mark it as errored
+                           markDirty tempKey -- we failed to build this target, so mark it dirty
                            removeTempFiles tmp3 tmpStdout
                            nonZeroExitStr code
                            return $ ExitFailure code
