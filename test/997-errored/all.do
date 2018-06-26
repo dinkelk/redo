@@ -11,7 +11,7 @@ fi
 
 # Expect error this time:
 # Force a rebuild
-touch maybe_error.do
+touch static
 ! redo depend_on_maybe_error 2>/dev/null
 if ! test "`cat maybe_error`" = "Y"
 then
