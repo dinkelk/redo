@@ -21,3 +21,5 @@ sed 's@660-stamp/all@@1' |
 sed 's@999-installer/all@@1' |
 sed 's@200-shell/all@@1' |
 xargs redo-ifchange
+
+redo 997-errored/all

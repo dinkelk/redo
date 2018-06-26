@@ -10,5 +10,6 @@ else
     cat maybe_error
   fi
   echo -n "Y"
+  redo-ifchange static
   exit 0
 fi
