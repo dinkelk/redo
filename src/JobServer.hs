@@ -118,8 +118,7 @@ runJob handle j = bool runJob' forkJob =<< tryGetToken handle
       processStatus <- forkProcess $ runForkedJob handle j
       return $ Left processStatus
     -- Run a job on the current process without forking:
-    runJob' = do ret <- j
-                 return $ Right ret
+    runJob' = Right <$> j
 
 -- Run a job and then return the token associated with it.
 runForkedJob :: JobServerHandle -> IO ExitCode -> IO ()
