@@ -59,12 +59,10 @@ upToDate'' level doDebug topLevelStamp key tempKey target = do
         if built then if level == 0 then return True `debug'` "+already built"
                                     else return False `debug'` "-newly built"
         else do
-         clean <- isClean tempKey  
-         -- If we have already checked off this target as up to date, there is no need to check again
-         if clean then return True `debug'` "+clean"
-         else do
            dirty <- isDirty tempKey 
            -- If we have already checked off this target as dirty, don't delay, return not up to date
+           -- Note: If the target is clean, that does not mean that it is not newer than the top level target
+           -- so we still have to check the timestamps.
            if dirty then return False `debug'` "-dirty"
            else do 
              targetStamp <- safeStampTarget (fromJust existingTarget)
@@ -75,8 +73,17 @@ upToDate'' level doDebug topLevelStamp key tempKey target = do
              -- in subsequent instances of redo.
              if targetStamp > topLevelStamp then return False `debug'` "-modified"
              else do 
-               ret <- upToDate''' level doDebug topLevelStamp target key 
-               if ret then returnTrue else returnFalse
+               clean <- isClean tempKey  
+               -- If we have already checked off this target as clean, there is no need to check again
+               if clean then return True `debug'` "+clean"
+               else do
+                 -- Perform additional checks that can be done after checking the timestamp.
+                 -- These checks no longer depend on the top level target, they only depend
+                 -- on the current target. So if they check out, then we don't need to run 
+                 -- them again, thus based on the return from upToDate''' we cache whether
+                 -- the target is marked "dirty" or "clean"
+                 ret <- upToDate''' level doDebug targetStamp target key 
+                 if ret then returnTrue else returnFalse
   where
     -- Convenient debug function:
     debug' status string = if doDebug then debugUpToDate level target status string else status
@@ -105,7 +112,11 @@ upToDate''' level doDebug topLevelStamp target key = do
       -- If the target exists but a new do file was found for it then we need to rebuilt it, so
       -- it is not up to date.
       if newDo then return False `debug'` "-new do"
-      else depsUpToDate (level+1) target key doDebug topLevelStamp
+      else do
+        -- Make sure all the deps for this target are up to date as well.
+        upToDateDeps <- depsUpToDate (level+1) target key doDebug topLevelStamp
+        if upToDateDeps then return True `debug'` "+deps up to date"
+        else return False `debug'` "-dep(s) not up to date"
   where 
     debug' status string = if doDebug then debugUpToDate level target status string else status
     -- Does the target have a new do file from the last time it was built?

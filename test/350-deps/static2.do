@@ -1,2 +1,2 @@
 redo-ifchange static.in
-echo $$ >>static.log
+echo "static2" >>static.log
