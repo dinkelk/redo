@@ -24,3 +24,4 @@ todo
 src/ghci.sh
 cabal.config
 .stack-work
+stack.yaml.lock
