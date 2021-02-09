@@ -194,6 +194,7 @@ mainTop numJobs progName targets = do
   case progName of 
     "redo" -> exitWith' handle =<< redo targets'
     "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
+    "redo-ood" -> exitWith' handle =<< redoOutOfDate targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName 
     "redo-always" -> runOutsideDoError progName 
@@ -217,6 +218,7 @@ mainDo progName targets =
     "redo-ifchange" -> do exitCode <- redoIfChange targets
                           storeIfChangeDependencies targets
                           exitWith exitCode
+    "redo-ood" -> exitWith =<< redoOutOfDate targets
     "redo-ifcreate" -> storeIfCreateDependencies targets
     "redo-always" -> storeAlwaysDependency
     _ -> return ()

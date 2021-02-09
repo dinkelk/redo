@@ -1,6 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Build(redo, redoIfChange, isRunFromDoFile, storeIfChangeDependencies, storeIfCreateDependencies,
+module Build(redo, redoIfChange, redoOutOfDate, isRunFromDoFile, storeIfChangeDependencies, storeIfCreateDependencies,
              storeAlwaysDependency) where
 
 -- System imports:
@@ -136,6 +136,28 @@ redoIfChange = buildTargets redoIfChange'
                                 initializeSourceDatabase key target
                                 return ExitSuccess
                               else noDoFileError target
+
+-- Print the target name only if the target is not up to date for 'redo-ood' command:
+redoOutOfDate :: [Target] -> IO ExitCode
+redoOutOfDate = buildTargets redoOutOfDate'
+  where 
+    redoOutOfDate' target = do 
+      source <- isTargetSource key target
+      if source then return ExitSuccess
+      else do
+        currentStamp <- safeStampTarget target
+        modified <- isTargetModified key currentStamp
+        if modified then targetModifiedWarning target
+        else do
+          debugCheckFlag <- lookupEnv "REDO_CHECK"
+          let debugCheck = fromMaybe "" debugCheckFlag
+          upToDate' <- upToDate (not (null debugCheck)) key tempKey target
+          -- Try to run redo if out of date, if it fails, print an error message:
+          unless' upToDate' (putStrBuffered (unTarget target) >> return ExitSuccess)
+      where key = getKey target
+            tempKey = getTempKey target
+    -- Custom unless which return ExitSuccess if the condition is met
+    unless' condition action = if condition then return ExitSuccess else action
 
 -- This function allows us to build all the targets that don't have
 -- lock contention first, buying us a little time before we wait to build

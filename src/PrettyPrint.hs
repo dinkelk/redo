@@ -1,6 +1,6 @@
 
 module PrettyPrint(putRedoUnformatted, putRedoInfo, putRedoWarning, putInfoStrLn, putWarningStrLn, putErrorStrLn, 
-                   putStatusStrLn, putRedoStatus, putRedoError, putUnformattedStrLn, isColorTerminal) where
+                   putStatusStrLn, putRedoStatus, putRedoError, putUnformattedStrLn, isColorTerminal, putStrBuffered) where
 
 import System.IO (hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout, hIsTerminalDevice)
 import Data.Maybe (fromJust, isNothing, isJust, fromMaybe)

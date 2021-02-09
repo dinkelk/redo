@@ -1,5 +1,5 @@
 # Dependencies:
-binaries="redo redo-ifchange redo-ifcreate redo-always"
+binaries="redo redo-ifchange redo-ifcreate redo-always redo-ood"
 redo-ifchange $binaries
 
 # Create bin directory and copy over built files:
