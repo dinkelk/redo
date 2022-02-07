@@ -48,12 +48,12 @@ if [ -z "$DO_BUILT" ]; then
 	DO_PATH=$DO_BUILT.dir
 	export PATH=$DO_PATH:$PATH
 	rm -rf "$DO_PATH"
-	mkdir "$DO_PATH"
+	mkdir -p "$DO_PATH"
 	for d in redo redo-ifchange; do
 		ln -s "$REDO" "$DO_PATH/$d";
 	done
 	[ -e /bin/true ] && TRUE=/bin/true || TRUE=/usr/bin/true
-	for d in redo-ifcreate redo-stamp redo-always; do 
+	for d in redo-ifcreate redo-stamp redo-always; do
 		ln -s $TRUE "$DO_PATH/$d";
 	done
 fi
@@ -92,6 +92,10 @@ _run_dofile()
 {
 	export DO_DEPTH="$DO_DEPTH  "
 	export REDO_TARGET=$PWD/$target
+        do_dir=`dirname $REDO_TARGET`
+        tmp_dir=`dirname $tmp`
+        mkdir -p $do_dir
+        mkdir -p $tmp_dir
 	local line1
 	set -e
 	read line1 <"$PWD/$dofile" || true
