@@ -8,4 +8,5 @@ jobs:
   my_job:
     name: compile 
     runs-on: ubuntu-latest
-    run: ./do
+    steps:
+      - run: ./do
