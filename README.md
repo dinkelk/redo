@@ -1,6 +1,6 @@
 # redo
 
-[![Compile and Test](https://github.com/dinkelk/redo/actions/workflows/main.yml/badge.svg)](https://github.com/dinkelk/redo/actions/workflows/main.yml)
+[![Compile and Test](https://github.com/dinkelk/redo/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/dinkelk/redo/actions/workflows/main.yml)
 
 `redo` is like `make`, but better.
 
