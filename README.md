@@ -1,5 +1,7 @@
 # redo
 
+[![Compile and Test](https://github.com/dinkelk/redo/actions/workflows/main.yml/badge.svg)](https://github.com/dinkelk/redo/actions/workflows/main.yml)
+
 `redo` is like `make`, but better.
 
 Like `make`, `redo` allows you to rebuild source files when they have changed. But unlike `make`, `redo` is simple, easy to learn, and flexible. `redo` exhibits its power the Unix way, by leveraging other tools. Build scripts for `redo` are simply shell scripts which follow a few conventions. If you don't like shell, `redo` also supports any language that can be run with a shebang (`!#`), ie. python, perl, etc.
