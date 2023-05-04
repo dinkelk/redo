@@ -33,7 +33,7 @@ newtype TempKey = TempKey { tempKeyToFilePath :: FilePath } deriving (Show, Eq) 
 ---------------------------------------------------------------------
 -- Root database directory getters:
 ---------------------------------------------------------------------
--- Directory for storing and fetching data on dpendencies of redo targets.
+-- Directory for storing and fetching data on dependencies of redo targets.
 redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
