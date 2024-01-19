@@ -42,7 +42,7 @@ unescapeFilePath string = first : unescapeFilePath rest
 -- Removes ".." and "." directories when possible:
 removeDotDirs :: FilePath -> FilePath
 removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath)
-  where removeParents' :: [String] -> [String] -> [String] 
+  where removeParents' :: [String] -> [String] -> [String]
         removeParents' [] [] = []
         removeParents' path [] = path
         removeParents' [] (h:hs) = removeParents' [h] hs

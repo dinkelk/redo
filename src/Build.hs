@@ -10,7 +10,7 @@ import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
 import Data.Bool (bool)
-import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory, copyFile)
+import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory, copyFile, createDirectoryIfMissing, listDirectory)
 import System.Environment (getEnvironment, lookupEnv, getEnv)
 import System.Exit (ExitCode(..))
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
@@ -18,11 +18,10 @@ import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, tak
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
 import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
 import System.Posix.Types (ProcessID)
-import System.File.Tree (getDirectory, copyTo_)
 
 -- Local imports:
 import Types
-import Database 
+import Database
 import JobServer
 import UpToDate
 import PrettyPrint
@@ -38,13 +37,13 @@ storeIfCreateDependencies = storeDependencies storeIfCreateDep
 
 -- Store dependency for redo-always:
 storeAlwaysDependency :: IO ()
-storeAlwaysDependency = do 
+storeAlwaysDependency = do
   key <- Key <$> getEnv "REDO_KEY"
   storeAlwaysDep key
 
 -- Store dependencies given a store action and a list of dependencies to store:
-storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()  
-storeDependencies storeAction dependencies = do 
+storeDependencies :: (Key -> Target -> IO ()) -> [Target] -> IO ()
+storeDependencies storeAction dependencies = do
   key <- Key <$> getEnv "REDO_KEY"
   parentRedoPath <- getCurrentDirectory
   canonicalizedDeps <- mapM (canonicalize parentRedoPath) dependencies
@@ -54,9 +53,9 @@ storeDependencies storeAction dependencies = do
 
 -- Returns true if program was invoked from within a .do file, false if run from commandline
 isRunFromDoFile :: IO Bool
-isRunFromDoFile = do 
+isRunFromDoFile = do
   -- This is the top-level (first) call to redo by if REDO_KEY does not yet exist.
-  redoTarget <- lookupEnv "REDO_KEY"  
+  redoTarget <- lookupEnv "REDO_KEY"
   if isNothing redoTarget || null (fromJust redoTarget) then return False else return True
 
 -- Does the target file or directory exist on the filesystem?
@@ -69,7 +68,7 @@ isTargetSource key target = bool (return False) isTargetSource' =<< doesTargetEx
 
 -- Run do file if the target was not modified by the user first.
 isTargetModified :: Key -> Maybe Stamp -> IO Bool
-isTargetModified key currentStamp = do 
+isTargetModified key currentStamp = do
   cachedStamp <- getStamp key
   return $ isJust currentStamp && cachedStamp /= currentStamp
 
@@ -91,10 +90,18 @@ noDoFileError :: Target -> IO ExitCode
 noDoFileError target = do putErrorStrLn $ "Error: No .do file found to build target '" ++ unTarget target ++ "'"
                           return $ ExitFailure 1
 
+-- See if target is up to date. This handles passing the
+-- debug flag appropriately based on environment variable
+upToDate' :: Key -> TempKey -> Target -> IO Bool
+upToDate' key tempKey target = do
+  debugCheckFlag <- lookupEnv "REDO_CHECK"
+  let debugCheck = fromMaybe "" debugCheckFlag
+  upToDate (not (null debugCheck)) key tempKey target
+
 -- Just run the do file for a 'redo' command:
 redo :: [Target] -> IO ExitCode
 redo = buildTargets redo'
-  where redo' target = do 
+  where redo' target = do
           source <- isTargetSource key target
           currentStamp <- safeStampTarget target
           modified <- isTargetModified key currentStamp
@@ -107,8 +114,8 @@ redo = buildTargets redo'
 -- Only run the do file if the target is not up to date for 'redo-ifchange' command:
 redoIfChange :: [Target] -> IO ExitCode
 redoIfChange = buildTargets redoIfChange'
-  where 
-    redoIfChange' target = do 
+  where
+    redoIfChange' target = do
       source <- isTargetSource key target
       runFromDo <- isRunFromDoFile
       case (source, runFromDo) of
@@ -120,11 +127,9 @@ redoIfChange = buildTargets redoIfChange'
           modified <- isTargetModified key currentStamp
           if modified then targetModifiedWarning target
           else do
-            debugCheckFlag <- lookupEnv "REDO_CHECK"
-            let debugCheck = fromMaybe "" debugCheckFlag
-            upToDate' <- upToDate (not (null debugCheck)) key tempKey target
             -- Try to run redo if out of date, if it fails, print an error message:
-            unless' upToDate' (maybe (missingDo key target) (runDoFile key tempKey target currentStamp) =<< findDoFile target)
+            isUpToDate <- upToDate' key tempKey target
+            unless' isUpToDate (maybe (missingDo key target) (runDoFile key tempKey target currentStamp) =<< findDoFile target)
       where key = getKey target
             tempKey = getTempKey target
     -- Custom unless which return ExitSuccess if the condition is met
@@ -140,8 +145,8 @@ redoIfChange = buildTargets redoIfChange'
 -- Print the target name only if the target is not up to date for 'redo-ood' command:
 redoOutOfDate :: [Target] -> IO ExitCode
 redoOutOfDate = buildTargets redoOutOfDate'
-  where 
-    redoOutOfDate' target = do 
+  where
+    redoOutOfDate' target = do
       source <- isTargetSource key target
       if source then return ExitSuccess
       else do
@@ -149,11 +154,9 @@ redoOutOfDate = buildTargets redoOutOfDate'
         modified <- isTargetModified key currentStamp
         if modified then targetModifiedWarning target
         else do
-          debugCheckFlag <- lookupEnv "REDO_CHECK"
-          let debugCheck = fromMaybe "" debugCheckFlag
-          upToDate' <- upToDate (not (null debugCheck)) key tempKey target
           -- Try to run redo if out of date, if it fails, print an error message:
-          unless' upToDate' (putStrBuffered (unTarget target) >> return ExitSuccess)
+          isUpToDate <- upToDate' key tempKey target
+          unless' isUpToDate (putStrBuffered (unTarget target) >> return ExitSuccess)
       where key = getKey target
             tempKey = getTempKey target
     -- Custom unless which return ExitSuccess if the condition is met
@@ -178,9 +181,9 @@ buildTargets buildFunc targets = do
     keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
     let keepGoing' = fromMaybe "" keepGoing''
     let keepGoing = not $ null keepGoing'
-  
+
     -- Try to lock file and build all targets and accumulate list of unbuilt targets:
-    results <- mapM1 keepGoing (tryBuild handle) targets 
+    results <- mapM1 keepGoing (tryBuild handle) targets
     let (remainingTargets, processStatus) = unzip results
     let exitCodes = rights processStatus
     let processIDs = lefts processStatus
@@ -205,28 +208,28 @@ buildTargets buildFunc targets = do
   where
     -- Try to build a target using the job server, otherwise return the unbuild target with the lock file name:
     tryBuild :: JobServerHandle -> Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
-    tryBuild handle target = do 
+    tryBuild handle target = do
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       tryBuild' absTarget
       where
         tryBuild' :: Target -> IO ((Target, FilePath), Either ProcessID ExitCode)
         tryBuild' absTarget = do lckFileName <- getTargetLockFile absTarget
-                                 maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild' absTarget) 
+                                 maybe (return ((absTarget , lckFileName), Right ExitSuccess)) (runBuild' absTarget)
                                    =<< tryLockFile lckFileName Exclusive
         runBuild' :: Target -> FileLock -> IO ((Target, FilePath), Either ProcessID ExitCode)
-        runBuild' absTarget lock = do processReturn <- runJob handle $ buildFunc absTarget 
+        runBuild' absTarget lock = do processReturn <- runJob handle $ buildFunc absTarget
                                       unlockFile lock
                                       return ((Target "", ""), processReturn)
 
     -- Wait to build the target if the do file is given, regardless of lock contention:
     waitBuild :: JobServerHandle -> (Target, FilePath) -> IO ExitCode
     waitBuild _ (Target "", "") = return ExitSuccess
-    waitBuild handle (target, lckFileName) = do 
+    waitBuild handle (target, lckFileName) = do
       -- Return my token before blocking on the filepath. This allows another redo process to be run
       -- in the meantime.
-      returnToken handle 
+      returnToken handle
       -- Wait to acquire a lock:
-      lock <- lockFile lckFileName Exclusive 
+      lock <- lockFile lckFileName Exclusive
       -- Ok we have a lock, but we need to get a token first, so release the lock
       -- and get a token. If we don't do it in this order we could encounter deadlock.
       unlockFile lock
@@ -234,7 +237,7 @@ buildTargets buildFunc targets = do
       -- Try to grab the lock again. This should work most of the time, unless a process
       -- beats us to the lock right after we released it. If we don't get a lock, try again.
       -- If we get the lock, run the build function and return the exit code.
-      maybe (waitBuild handle (target, lckFileName)) 
+      maybe (waitBuild handle (target, lckFileName))
             (runBuildWithLock target) =<< tryLockFile lckFileName Exclusive
 
     -- Try to build the target if there is no lock contention:
@@ -242,13 +245,13 @@ buildTargets buildFunc targets = do
     runBuild handle target = do
       absTarget <- Target <$> canonicalizePath' (unTarget target)
       lckFileName <- getTargetLockFile absTarget
-      maybe (waitBuild handle (absTarget, lckFileName)) (runBuildWithLock absTarget) 
+      maybe (waitBuild handle (absTarget, lckFileName)) (runBuildWithLock absTarget)
         =<< tryLockFile lckFileName Exclusive
 
     -- Given a lock and a target, run the target on this thread and then unlock before returning the
     -- exit code.
     runBuildWithLock :: Target -> FileLock -> IO ExitCode
-    runBuildWithLock absTarget lock = do exitCode <- buildFunc absTarget 
+    runBuildWithLock absTarget lock = do exitCode <- buildFunc absTarget
                                          unlockFile lock
                                          return exitCode
 
@@ -258,19 +261,19 @@ buildTargets buildFunc targets = do
     returnExitCode (code:codes) = if code /= ExitSuccess then return code else returnExitCode codes
 
     -- Helper function which returns the failing exit code if it exists, otherwise nothing
-    getFailingExitCode :: [ExitCode] -> Maybe ExitCode 
+    getFailingExitCode :: [ExitCode] -> Maybe ExitCode
     getFailingExitCode [] = Nothing
     getFailingExitCode (code:codes) = if code /= ExitSuccess then Just code else getFailingExitCode codes
 
     -- Special mapMs which exits early if it detects that an operation fails:
-    mapM1 :: Bool -> (Target -> IO ((Target, FilePath), Either ProcessID ExitCode)) 
+    mapM1 :: Bool -> (Target -> IO ((Target, FilePath), Either ProcessID ExitCode))
                   -> [Target] -> IO [((Target, FilePath), Either ProcessID ExitCode)]
     mapM1 keepGoing f = mapM''
-      where 
+      where
         mapM'' [] = return [((Target "", ""), Right ExitSuccess)]
-        mapM'' (x:xs) = do 
-          (a, newExitCode) <- f x 
-          if isRight newExitCode && fromRight newExitCode /= ExitSuccess then 
+        mapM'' (x:xs) = do
+          (a, newExitCode) <- f x
+          if isRight newExitCode && fromRight newExitCode /= ExitSuccess then
             if keepGoing then runNext (a, newExitCode)
             else return [(a, newExitCode)]
           else runNext (a, newExitCode)
@@ -283,11 +286,11 @@ buildTargets buildFunc targets = do
     -- Special mapMs which exits early if it detects that an operation fails:
     mapM2 :: Bool -> (a -> IO ExitCode) -> [a] -> IO [ExitCode]
     mapM2 keepGoing f = mapM''
-      where 
+      where
         mapM'' [] = return [ExitSuccess]
-        mapM'' (x:xs) = do 
-          newExitCode <- f x 
-          if newExitCode /= ExitSuccess then 
+        mapM'' (x:xs) = do
+          newExitCode <- f x
+          if newExitCode /= ExitSuccess then
             if keepGoing then runNext newExitCode
             else return [newExitCode]
           else runNext newExitCode
@@ -297,7 +300,7 @@ buildTargets buildFunc targets = do
 -- Run the do script. Note: this must be run in the do file's directory!:
 -- and the absolute target must be passed.
 runDoFile :: Key -> TempKey -> Target -> Maybe Stamp -> DoFile -> IO ExitCode
-runDoFile key tempKey target currentTimeStamp doFile = do 
+runDoFile key tempKey target currentTimeStamp doFile = do
   -- Get some environment variables:
   keepGoing' <- lookupEnv "REDO_KEEP_GOING"           -- Variable to tell redo to keep going even on failure
   shuffleDeps' <- lookupEnv "REDO_SHUFFLE"            -- Variable to tell redo to shuffle build order
@@ -321,8 +324,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   let sessionNumber = fromMaybe "" sessionNumber'
 
   -- Get the temporary file names for the shellCmd:
-  tmp3 <- getTempFile target 
-  tmpStdout <- getStdoutFile target 
+  tmp3 <- getTempFile target
+  tmpStdout <- getStdoutFile target
 
   -- Construct the shell command:
   cmd <- shellCmd shellArgs doFile target tmp3 tmpStdout
@@ -341,7 +344,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 
   -- Add to environment, and make sure there is only one of each variable added:
   oldEnv <- getEnvironment
-  let newEnv = toList $ adjust (++ ":.") "PATH" 
+  let newEnv = toList $ adjust (++ ":.") "PATH"
                       $ insert "REDO_SESSION" sessionNumber
                       $ insert "REDO_KEEP_GOING" keepGoing
                       $ insert "REDO_SHUFFLE" shuffleDeps
@@ -350,18 +353,18 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_DEBUG_2" dashD2
                       $ insert "REDO_CHECK" dashC
                       $ insert "REDO_DEPTH" redoDepth
-                      $ insert "REDO_INIT_PATH" redoInitPath 
+                      $ insert "REDO_INIT_PATH" redoInitPath
                       $ insert "REDO_KEY" (keyToFilePath key)
-                      $ insert "REDO_SHELL_ARGS" shellArgs 
+                      $ insert "REDO_SHELL_ARGS" shellArgs
                       $ fromList oldEnv
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
   exit <- waitForProcess processHandle
-  case exit of  
-    ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory 
+  case exit of
+    ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory
                       -- If the target exists, then store the target stamp
                       maybe (nonZeroExitStr exitCode) (stampBuiltTarget tmp3 tmpStdout)
                         =<< getBuiltTargetPath key target
-                      bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0) 
+                      bool (return $ ExitFailure exitCode) (return ExitSuccess) (exitCode == 0)
     ExitFailure code -> do markErrored key   -- we failed to build this target, so mark it as errored
                            markDirty tempKey -- we failed to build this target, so mark it dirty
                            removeTempFiles tmp3 tmpStdout
@@ -369,8 +372,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                            return $ ExitFailure code
   where
     -- Print generic exit string:
-    nonZeroExitStr code = putErrorStrLn $ "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++ 
-                                           unTarget target ++ "' with exit code: " ++ show code 
+    nonZeroExitStr code = putErrorStrLn $ "Error: Redo script '" ++ unDoFile doFile ++ "' failed to build '" ++
+                                           unTarget target ++ "' with exit code: " ++ show code
 
     -- Store the stamp of the built target:
     stampBuiltTarget tmp3 tmpStdout builtTarget = do
@@ -383,22 +386,22 @@ runDoFile key tempKey target currentTimeStamp doFile = do
     removeTempFiles :: FilePath -> FilePath -> IO ()
     removeTempFiles tmp3 tmpStdout = do safeRemoveTempFile tmp3
                                         safeRemoveTempFile tmpStdout
-      
+
     -- Temporary file names:
     redoPath = takeDirectory $ unDoFile doFile
 
     -- Move temp files to target after creation:
     moveTempFiles :: FilePath -> FilePath -> Bool -> IO Int
-    moveTempFiles tmp3 tmpStdout targetIsDirectory = do 
+    moveTempFiles tmp3 tmpStdout targetIsDirectory = do
       tmp3Exists <- doesTargetExist $ Target tmp3
       stdoutExists <- doesTargetExist $ Target tmpStdout
       stdoutSize <- safeFileSize tmpStdout
       newTimeStamp <- safeStampTarget target
       targetIsStillDirectory <- doesDirectoryExist $ unTarget target
       -- See if the user modified $1 directly... we don't care if the user modified a directory target however
-      if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then 
+      if currentTimeStamp /= newTimeStamp && not targetIsDirectory && not targetIsStillDirectory then
         dollarOneModifiedError >> return 1
-      else 
+      else
         -- If $3 was written to then move it to the proper location. Throw an error is stdout was
         -- written to as well.
         if tmp3Exists then do
@@ -415,7 +418,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
         -- Basically, if the stdout temp file has a size of zero, we should remove it, because no
         -- target should be created. This is our way of denoting the file as correctly built.
         -- Usually this target won't exist anyways, but it might exist in the case
-        -- of a modified .do file that was generating something, and now is not! In this case we remove the 
+        -- of a modified .do file that was generating something, and now is not! In this case we remove the
         -- old target to denote that the new .do file is working as intended. See the unit test "silencetest.do"
         ------------------------------------------------------------------------------------------------------
         -- Note: in this case a stdout file size of 0 was created. This is the default
@@ -427,34 +430,46 @@ runDoFile key tempKey target currentTimeStamp doFile = do
         -- this must be a phony target. Let's create it in the meta directory.
         else storePhonyTarget key >> return 0
       where safeRenameFile :: FilePath -> Target -> IO ()
-            safeRenameFile old new = catch (renameFile old (unTarget new)) 
+            safeRenameFile old new = catch (renameFile old (unTarget new))
               -- Sometimes renaming a file fails across devices due to symlinks, so use copy instead:
               -- No need to delete, since this is all stored in tmp
               (\(_ :: SomeException) -> copyFile old (unTarget new) )
+            -- copyDirectory :: FilePath -> FilePath -> IO ()
+            -- copyDirectory from to = getDirectory from >>= copyTo_ to
+
             copyDirectory :: FilePath -> FilePath -> IO ()
-            copyDirectory from to = getDirectory from >>= copyTo_ to 
-            safeRenameFileOrDir :: FilePath -> Target -> IO () 
+            copyDirectory src dst = do
+              isDir <- doesDirectoryExist src
+              if isDir
+                then do
+                  createDirectoryIfMissing True dst
+                  contents <- listDirectory src
+                  mapM_ (\name -> copyDirectory (src </> name) (dst </> name)) contents
+                else
+                  copyFile src dst
+
+            safeRenameFileOrDir :: FilePath -> Target -> IO ()
             safeRenameFileOrDir old new = do
               isDir <- doesDirectoryExist old
               -- Handle directory moving...
               -- We need to remove the directory first because renameDirectory does not overwrite on all platforms
               catch (
                 if isDir then catch (do safeRemoveDirectoryRecursive (unTarget new)
-                                        renameDirectory old (unTarget new) ) 
+                                        renameDirectory old (unTarget new) )
                   (\(_ :: SomeException) -> do safeRemoveDirectoryRecursive (unTarget new)
                                                copyDirectory old (unTarget new) )
                 else safeRenameFile old new)
                 (\(e :: SomeException) -> copyError e)
-    
+
     -- Error messages for improper use of redo:
     wroteToStdoutError :: IO ()
     wroteToStdoutError = putErrorStrLn $
       "Error: '" ++ unDoFile doFile ++ "' wrote to stdout and created $3.\n" ++
-      "You should write status messages to stderr, not stdout." 
+      "You should write status messages to stderr, not stdout."
     dollarOneModifiedError :: IO ()
-    dollarOneModifiedError = putErrorStrLn $ 
+    dollarOneModifiedError = putErrorStrLn $
       "Error: '" ++ unDoFile doFile ++ "' modified '" ++ unTarget target ++ "' directly.\n" ++
-      "You should update $3 (the temporary file) or stdout, not $1." 
+      "You should update $3 (the temporary file) or stdout, not $1."
     copyError :: SomeException -> IO ()
     copyError ex = putErrorStrLn $
       "Error: Unable to move built target to location '" ++ unTarget target ++ "': " ++ displayException ex
@@ -469,14 +484,14 @@ shellCmd shellArgs doFile target tmp3 tmpStdout = do
   return $ unwords [shebang, quote $ unDoFile doFile, quote targetRel2Do, quote arg2, quote tmp3, ">", quote tmpStdout]
   where
     -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the targetRel2Do name with the extension removed.
-    -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now 
-    -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do 
+    -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now
+    -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do
     -- file or a <targetRel2DoName>.do file. For example the $2 for "redo file.x.y.z" run from different .do files is shown below:
     --
-    --    .do file name |         $2  | description 
-    --    file.x.y.z.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing 
+    --    .do file name |         $2  | description
+    --    file.x.y.z.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     -- default.x.y.z.do |       file  | we know .x.y.z is the extension, so remove it
-    --   default.y.z.do |     file.x  | we know .y.z is the extension, so remove it 
+    --   default.y.z.do |     file.x  | we know .y.z is the extension, so remove it
     --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
     --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
     --
@@ -490,7 +505,7 @@ shellCmd shellArgs doFile target tmp3 tmpStdout = do
     -- other than shell, ie. python or perl
     readShebang :: DoFile -> IO String
     readShebang file = readFirstLine >>= extractShebang
-      where 
+      where
         readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
