@@ -40,22 +40,14 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 # extra-deps:
-#
 # extra-include-dirs:
-#   - /root/leveldb/include
-#
 # extra-lib-dirs:
-#   - /root/leveldb/build/
 
 # Override default flag values for local packages and extra-deps
 flags: {}
 
 # Extra package databases containing global packages
 extra-package-dbs: []
-
-#ghc-options:
-#  "$everything": -fPIC
-#  "$locals": -fPIC
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true

@@ -19,9 +19,6 @@ executable redo-haskell
   other-modules:       Build, Database, DatabaseEntry, FilePathUtil, JobServer, PrettyPrint, Types, UpToDate
   other-extensions:    StandaloneDeriving, ScopedTypeVariables, CPP
   build-depends:       base, containers, directory, filepath, process, time, bytestring, unix, cryptohash, hex, ansi-terminal, random, filelock
---  data-default, leveldb-haskell
---  extra-libraries: stdc++
---  ghc-options: -pgmlg++
   hs-source-dirs:      src
   default-language:    Haskell2010
 
