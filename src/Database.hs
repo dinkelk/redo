@@ -19,11 +19,6 @@ import System.Exit (exitFailure)
 import System.Environment (getEnv, setEnv)
 import System.Random (randomRIO)
 
--- leveldb stuff
---import Database.LevelDB
---import Data.Default
---import Control.Monad.IO.Class (liftIO)
-
 import DatabaseEntry
 import PrettyPrint
 import FilePathUtil
@@ -335,26 +330,11 @@ keyToTempKey key = TempKey $ unpathify $ keyToFilePath key
 ---------------------------------------------------------------------
 -- Public functions initializing a redo session:
 ---------------------------------------------------------------------
-
---createLevelDatabase :: IO ()
---createLevelDatabase = runResourceT $ do
---  -- dir <- redoMetaDirectory
---  db <- open "yodle" defaultOptions{ createIfMissing = True , cacheSize= 2048 }
---  putStrLn' "Put value"
---  put db def foo bar
---  return ()
---  --get db def "foo" >>= liftIO . print
---  where
---    putStrLn' = liftIO . putStrLn
---    foo = BS.pack "foo"
---    bar = BS.pack "bar"
-
 initializeSession :: IO ()
 initializeSession = do
   sessionNumber <- randomRIO (0, 1000000::Int)
   setEnv "REDO_SESSION" (show sessionNumber)
   createRedoTempDirectory
---  createLevelDatabase
 
 ---------------------------------------------------------------------
 -- Public functions creating and clearing the cache
