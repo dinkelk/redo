@@ -17,6 +17,10 @@
 #  location: "./custom-snapshot.yaml"
 resolver: lts-22.6
 
+# Compilation optimization
+ghc-options:
+  "$everything": -O2 -funfolding-use-threshold=16
+
 # User packages to be built.
 # Various formats can be used as shown in the example below.
 #
