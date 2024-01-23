@@ -2,7 +2,10 @@ name: Compile and Test
 on:
   push:
     branches:
-    - master
+      - master
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 jobs:
   compile_job:
@@ -19,12 +22,19 @@ jobs:
       - name: List files in the repository
         run: |
           ls ${{ github.workspace }}
-      - uses: haskell/actions/setup@v2
+     - uses: haskell-actions/setup@v2
         with:
-          #ghc-version: '8.8.4' # Exact version of ghc to use
+          # ghc-version: '8.8.4' # Exact version of ghc to use
           # cabal-version: 'latest'. Omitted, but defaults to 'latest'
           enable-stack: true
           stack-version: 'latest'
       - run: ${{ github.workspace }}/do
       - run: PATH=$PATH:${{ github.workspace }}/bin redo test/all
+      - name: Archive redo binaries
+        uses: actions/upload-artifact@v3
+        with:
+          name: redo_bin
+          path: ${{ github.workspace }}/bin
+          if-no-files-found: ignore
       - run: echo "🍏 This job's status is ${{ job.status }}."
+        if: always()
