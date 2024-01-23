@@ -1,15 +1,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps, 
-                 getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, markDirty, storeStamp, 
-                 doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty, 
-                 initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey, 
-                 TempKey(..), Key(..), initializeSession, getTargetLockFile, getJobServerPipe, 
+module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps,
+                 getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, markDirty, storeStamp,
+                 doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty,
+                 initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey,
+                 TempKey(..), Key(..), initializeSession, getTargetLockFile, getJobServerPipe,
                  getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
-import Crypto.Hash.MD5 (hash) 
+import Crypto.Hash.MD5 (hash)
 import Data.Hex (hex)
 import Data.Bool (bool)
 import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
@@ -38,8 +38,8 @@ redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
 getUsername :: IO String
-getUsername = catch (getEnv "USERNAME") 
-                (\(_ :: SomeException) -> catch (getEnv "USER") 
+getUsername = catch (getEnv "USERNAME")
+                (\(_ :: SomeException) -> catch (getEnv "USER")
                   (\(_ :: SomeException) -> getEnv "REDO_SESSION" )
                 )
 
@@ -56,9 +56,9 @@ redoDatabaseDirectory = do
   root <- redoMetaDirectory
   return $ root </> "database"
 
--- Directory for storing stamps of redo targets and sources. We need this to 
+-- Directory for storing stamps of redo targets and sources. We need this to
 -- persist failed builds, which is why it is not integrated into the database
--- directory. The database directory is reset at the beginning of a rebuild 
+-- directory. The database directory is reset at the beginning of a rebuild
 -- for a target.
 redoStampDirectory :: IO FilePath
 redoStampDirectory = do
@@ -69,38 +69,38 @@ redoStampDirectory = do
 -- the upToDate function
 redoCacheDirectory :: IO FilePath
 redoCacheDirectory = do
-  root <- redoTempDirectory 
+  root <- redoTempDirectory
   return $ root </> "cache"
 
 -- Directory for storing target file locks to syncronize parallel builds of targets
 redoTargetLockFileDirectory :: IO FilePath
 redoTargetLockFileDirectory = do
-  root <- redoTempDirectory 
+  root <- redoTempDirectory
   return $ root </> "target_locks"
 
 -- Directory for storing database file locks to syncronize parallel database access
 redoDatabaseLockFileDirectory :: IO FilePath
 redoDatabaseLockFileDirectory = do
-  root <- redoTempDirectory 
+  root <- redoTempDirectory
   return $ root </> "db_locks"
 
 -- Directory for storing temporary target files to automically building redo files
 redoTempTargetDirectory :: IO FilePath
 redoTempTargetDirectory = do
-  root <- redoTempDirectory 
+  root <- redoTempDirectory
   return $ root </> "temp"
 
 -- Directory for storing temporary target files to automically building redo files
 redoStdoutTargetDirectory :: IO FilePath
 redoStdoutTargetDirectory = do
-  root <- redoTempDirectory 
+  root <- redoTempDirectory
   return $ root </> "stdout"
 
 ---------------------------------------------------------------------
 -- Functions for getting database directories for a target:
 ---------------------------------------------------------------------
 -- Get the lock file prefix for a target:
-getTargetLockFileBase :: TempKey -> IO FilePath 
+getTargetLockFileBase :: TempKey -> IO FilePath
 getTargetLockFileBase key = do
   lockFileDir <- redoTargetLockFileDirectory
   return $ lockFileDir </> tempKeyToFilePath key
@@ -111,13 +111,13 @@ getDatabaseLockFileBase key = do
   return $ lockFileDir </> tempKeyToFilePath key
 
 -- Get the temp file prefix for a target:
-getTempTargetDatabase :: TempKey -> IO FilePath 
+getTempTargetDatabase :: TempKey -> IO FilePath
 getTempTargetDatabase key = do
   tempFileDir <- redoTempTargetDirectory
   return $ tempFileDir </> tempKeyToFilePath key
 
 -- Get the stdout file prefix for a target:
-getStdoutTargetDatabase :: TempKey -> IO FilePath 
+getStdoutTargetDatabase :: TempKey -> IO FilePath
 getStdoutTargetDatabase key = do
   stdoutFileDir <- redoStdoutTargetDirectory
   return $ stdoutFileDir </> tempKeyToFilePath key
@@ -125,8 +125,8 @@ getStdoutTargetDatabase key = do
 -- Get the database directory for a target's stamp:
 getStampDatabase :: Key -> IO FilePath
 getStampDatabase key = do
-  stampDir <- redoStampDirectory 
-  return $ stampDir </> keyToFilePath key 
+  stampDir <- redoStampDirectory
+  return $ stampDir </> keyToFilePath key
 
 -- Get the database directory for a target:
 getDatabase :: Key -> IO FilePath
@@ -160,11 +160,11 @@ getErroredEntry :: Key -> IO Entry
 getErroredEntry = getDatabaseEntry "e"
 
 -- Get the database entry for a target's always dependencies:
-getAlwaysEntry :: Key -> IO Entry 
+getAlwaysEntry :: Key -> IO Entry
 getAlwaysEntry = getDatabaseEntry "a"
 
 -- Get the database entry for a target's always dependencies:
-getPhonyTargetEntry :: Key -> IO Entry 
+getPhonyTargetEntry :: Key -> IO Entry
 getPhonyTargetEntry = getDatabaseEntry "p"
 
 -- Get the database entry for a target's do file name:
@@ -203,20 +203,20 @@ getDirtyEntry = getCacheEntry "d"
 
 -- Get the filename for a lockfile for a particular target:
 getTargetLockFile :: Target -> IO FilePath
-getTargetLockFile target = do 
+getTargetLockFile target = do
   lockFileDir <- getTargetLockFileBase key
   return $ lockFileDir ++ "l"
   where key = getTempKey target
 
 -- Get the filename for a lockfile for a particular database entry:
 getDatabaseLockFile :: Key -> IO FilePath
-getDatabaseLockFile key = do 
+getDatabaseLockFile key = do
   lockFileDir <- getDatabaseLockFileBase tempKey
   return $ lockFileDir ++ "l"
   where tempKey = keyToTempKey key
 
 getDatabaseLockFile' :: TempKey -> IO FilePath
-getDatabaseLockFile' tempKey = do 
+getDatabaseLockFile' tempKey = do
   lockFileDir <- getDatabaseLockFileBase tempKey
   return $ lockFileDir ++ "l"
 
@@ -236,7 +236,7 @@ getStdoutFile target = do
 
 -- Get the file for the job server named pipe:
 getJobServerPipe :: IO FilePath
-getJobServerPipe = do 
+getJobServerPipe = do
   lockFileDir <- redoTempDirectory
   return $ lockFileDir </> "tokenpipe"
 
@@ -261,7 +261,7 @@ refreshDatabase key = do
 -- Private (non thread safe) functions modifying target databases:
 ---------------------------------------------------------------------
 -- Store ifchange dependencies for a target:
-storeIfChangeDep' :: Key -> Target -> IO () 
+storeIfChangeDep' :: Key -> Target -> IO ()
 storeIfChangeDep' key dep = do
   ifChangeEntry <- getIfChangeEntry key
   appendEntry ifChangeEntry (escapeFilePath $ unTarget dep)
@@ -280,7 +280,7 @@ storeStamp' key stamp = do
   where ratio = toRational $ unStamp stamp
 
 -- Mark a target as a source file in the cache:
-markSource' :: Key -> IO () 
+markSource' :: Key -> IO ()
 markSource' key = createEntry =<< getSourceEntry key
 
 ---------------------------------------------------------------------
@@ -398,8 +398,8 @@ getIfCreateDeps :: Key -> IO [Target]
 getIfCreateDeps key = withDatabaseLock key func
   where func = do ifCreateEntry <- getIfCreateEntry key
                   getIfCreateDeps' ifCreateEntry
-                  where getIfCreateDeps' entry = 
-                          catch (do 
+                  where getIfCreateDeps' entry =
+                          catch (do
                             targets <- readEntry entry
                             return $ map convert targets)
                           (\(_ :: SomeException) -> return [])
@@ -411,7 +411,7 @@ getIfChangeDeps key = withDatabaseLock key func
   where func = do ifChangeDir <- getIfChangeEntry key
                   getIfChangeDeps' ifChangeDir
                   where getIfChangeDeps' entry =
-                          catch (do 
+                          catch (do
                             targets <- readEntry entry
                             return $ map convert targets)
                           (\(_ :: SomeException) -> return [])
@@ -423,17 +423,17 @@ isErrored key = withDatabaseLock key func
   where func = doesEntryExist =<< getErroredEntry key
 
 -- Has the target been marked clean in the cache?:
-isBuilt :: TempKey -> IO Bool 
+isBuilt :: TempKey -> IO Bool
 isBuilt key = withDatabaseLock' key func
   where func = doesEntryExist =<< getBuiltEntry key
 
 -- Has the target been marked clean in the cache?:
-isClean :: TempKey -> IO Bool 
+isClean :: TempKey -> IO Bool
 isClean key = withDatabaseLock' key func
   where func = doesEntryExist =<< getCleanEntry key
 
 -- Has the target been marked dirty in the cache?:
-isDirty :: TempKey -> IO Bool 
+isDirty :: TempKey -> IO Bool
 isDirty key = withDatabaseLock' key func
   where func = doesEntryExist =<< getDirtyEntry key
 
@@ -457,20 +457,20 @@ getBuiltTargetPath key target = withDatabaseLock key func
 ---------------------------------------------------------------------
 -- Functions writing database entries:
 ---------------------------------------------------------------------
-storeIfChangeDep :: Key -> Target -> IO () 
+storeIfChangeDep :: Key -> Target -> IO ()
 storeIfChangeDep key dep = withDatabaseLock key (storeIfChangeDep' key dep)
 
 -- Store the ifcreate dep only if the target doesn't exist right now
 storeIfCreateDep :: Key -> Target -> IO ()
 storeIfCreateDep key dep = withDatabaseLock key (bool storeIfCreateDep'
   (putErrorStrLn ("Error: Running redo-ifcreate on '" ++ unTarget dep ++ "' failed because it already exists.") >> exitFailure) =<< doesTargetExist dep)
-  where storeIfCreateDep' :: IO () 
+  where storeIfCreateDep' :: IO ()
         storeIfCreateDep' = do
           ifCreateEntry <- getIfCreateEntry key
           appendEntry ifCreateEntry (escapeFilePath $ unTarget dep)
 
 -- Store an "always dirty" dependency for a target:
-storeAlwaysDep :: Key -> IO () 
+storeAlwaysDep :: Key -> IO ()
 storeAlwaysDep key = withDatabaseLock key func
   where func = createEntry =<< getAlwaysEntry key
 
@@ -485,7 +485,7 @@ isSource key = withDatabaseLock key func
   where func = doesEntryExist =<< getSourceEntry key
 
 -- Store a phony target for the given target in the database:
-storePhonyTarget :: Key -> IO () 
+storePhonyTarget :: Key -> IO ()
 storePhonyTarget key = withDatabaseLock key func
   where func = do phonyTargetDir <- getPhonyTargetEntry key
                   writeEntry phonyTargetDir (escapeFilePath ".")

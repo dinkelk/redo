@@ -7,7 +7,7 @@ ercho()
 check_dependency()
 {
   dep=$1
-  which $dep > /dev/null 
+  which $dep > /dev/null
   if [ "$?" != "0" ]
   then
     ercho "Error: '$dep' must be installed before proceeding!"

@@ -1,5 +1,5 @@
 
-module PrettyPrint(putRedoUnformatted, putRedoInfo, putRedoWarning, putInfoStrLn, putWarningStrLn, putErrorStrLn, 
+module PrettyPrint(putRedoUnformatted, putRedoInfo, putRedoWarning, putInfoStrLn, putWarningStrLn, putErrorStrLn,
                    putStatusStrLn, putRedoStatus, putRedoError, putUnformattedStrLn, isColorTerminal, putStrBuffered) where
 
 import System.IO (hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout, hIsTerminalDevice)
@@ -51,11 +51,11 @@ putColorStrLn color string = do
 putUnformattedStrLn :: String -> IO ()
 putUnformattedStrLn = hPutStrLn stderr
 putInfoStrLn :: String -> IO ()
-putInfoStrLn = putColorStrLn green 
+putInfoStrLn = putColorStrLn green
 putWarningStrLn :: String -> IO ()
-putWarningStrLn = putColorStrLn yellow 
+putWarningStrLn = putColorStrLn yellow
 putErrorStrLn :: String -> IO ()
-putErrorStrLn = putColorStrLn red 
+putErrorStrLn = putColorStrLn red
 putStatusStrLn :: String -> IO ()
 putStatusStrLn = putColorStrLn cyan
 

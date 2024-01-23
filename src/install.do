@@ -6,4 +6,4 @@ redo-ifchange $binaries
 installdir=../bin
 mkdir -p $installdir
 for b in $binaries; do strip $b; done
-mv $binaries $installdir 
+mv $binaries $installdir

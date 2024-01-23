@@ -9,7 +9,7 @@ import FilePathUtil
 -- Type Definitions:
 ---------------------------------------------------------------------
 -- This file stores name value pairs as directories. The entry is the
--- name and is stored as a directory. A list of values can be stored 
+-- name and is stored as a directory. A list of values can be stored
 -- inside of an entry, represented by nested directories.
 newtype Entry = Entry { entryToFilePath :: FilePath } deriving (Eq, Show) -- The meta directory associated with a target
 
@@ -32,16 +32,16 @@ removeEntry entry = safeRemoveDirectoryRecursive (entryToFilePath entry)
 
 -- Write to a newly created entry or overwrite the previous entry:
 writeEntry :: Entry -> String -> IO ()
-writeEntry entry contents = do 
+writeEntry entry contents = do
   safeRemoveDirectoryRecursive entry'
-  safeCreateDirectoryRecursive dir 
+  safeCreateDirectoryRecursive dir
   where entry' = entryToFilePath entry
         dir = entry' </> contents
 
 -- Write a new value to the entry:
 appendEntry :: Entry -> String -> IO ()
 appendEntry entry contents =
-  safeCreateDirectoryRecursive dir 
+  safeCreateDirectoryRecursive dir
   where entry' = entryToFilePath entry
         dir = entry' </> contents
 

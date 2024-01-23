@@ -5,7 +5,7 @@ import Data.Maybe (isNothing, fromJust)
 import System.FilePath (takeExtension)
 
 import Types
-import Database 
+import Database
 
 -- This module provides a single function which returns whether a
 -- redo target needs to be rebuilt or if the target is up to date.
@@ -50,21 +50,21 @@ upToDate'' level doDebug topLevelStamp key tempKey target = do
       -- If neither a target or a phony target exists, then the target is obviously not up to date
       if isNothing existingTarget then return False `debug'` "-not built"
       else do
-        built <- isBuilt tempKey  
+        built <- isBuilt tempKey
         -- If we have built this target already this session, and the level of recursion is 0 we
         -- know we are trying to rebuild this target but it has already built so it is up to date.
-        -- If the level of recursion is greater than zero we know that this target is a newly 
+        -- If the level of recursion is greater than zero we know that this target is a newly
         -- rebuilt dependency of the current target, so that target needs to be rebuilt too, so
         -- it is not up to date.
         if built then if level == 0 then return True `debug'` "+already built"
                                     else return False `debug'` "-newly built"
         else do
-           dirty <- isDirty tempKey 
+           dirty <- isDirty tempKey
            -- If we have already checked off this target as dirty, don't delay, return not up to date
            -- Note: If the target is clean, that does not mean that it is not newer than the top level target
            -- so we still have to check the timestamps.
            if dirty then return False `debug'` "-dirty"
-           else do 
+           else do
              targetStamp <- safeStampTarget (fromJust existingTarget)
              -- If the target stamp is greater (newer) than the top level stamp then the target
              -- has been modified relative to the top level target.
@@ -72,17 +72,17 @@ upToDate'' level doDebug topLevelStamp key tempKey target = do
              -- level target, does not mean that it is newer than every future top level target
              -- in subsequent instances of redo.
              if targetStamp > topLevelStamp then return False `debug'` "-modified"
-             else do 
-               clean <- isClean tempKey  
+             else do
+               clean <- isClean tempKey
                -- If we have already checked off this target as clean, there is no need to check again
                if clean then return True `debug'` "+clean"
                else do
                  -- Perform additional checks that can be done after checking the timestamp.
                  -- These checks no longer depend on the top level target, they only depend
-                 -- on the current target. So if they check out, then we don't need to run 
+                 -- on the current target. So if they check out, then we don't need to run
                  -- them again, thus based on the return from upToDate''' we cache whether
                  -- the target is marked "dirty" or "clean"
-                 ret <- upToDate''' level doDebug targetStamp target key 
+                 ret <- upToDate''' level doDebug targetStamp target key
                  if ret then returnTrue else returnFalse
   where
     -- Convenient debug function:
@@ -93,13 +93,13 @@ upToDate'' level doDebug topLevelStamp key tempKey target = do
     -- Helper function which returns false and marks the target as dirty:
     returnFalse :: IO Bool
     returnFalse = markDirty tempKey >> return False
-    
--- A continuation of UpToDate''. This function checks if the target is a source 
+
+-- A continuation of UpToDate''. This function checks if the target is a source
 -- file or if a new do file was found or removed. Finally it checks to see if the
 -- target's dependencies are up to date:
 upToDate''' :: Int -> Bool -> Maybe Stamp -> Target -> Key -> IO Bool
 upToDate''' level doDebug topLevelStamp target key = do
-  source <- isSource key  
+  source <- isSource key
   if source then return True `debug'` "+source"
   else do
     doFile <- findDoFile target
@@ -117,7 +117,7 @@ upToDate''' level doDebug topLevelStamp target key = do
         upToDateDeps <- depsUpToDate (level+1) target key doDebug topLevelStamp
         if upToDateDeps then return True `debug'` "+deps up to date"
         else return False `debug'` "-dep(s) not up to date"
-  where 
+  where
     debug' status string = if doDebug then debugUpToDate level target status string else status
     -- Does the target have a new do file from the last time it was built?
     newDoFile :: DoFile -> IO Bool
@@ -128,7 +128,7 @@ upToDate''' level doDebug topLevelStamp target key = do
       else maybe (return True) (pathsNotEqual doFile) =<< getDoFile key
       where pathsNotEqual path1 path2 = if path1 /= path2 then return True else return False
 
--- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date? 
+-- Are a target's redo-create or redo-always or redo-ifchange dependencies up to date?
 -- If so return, true, otherwise return false. Note that this function recurses on a target's
 -- dependencies to make sure the dependencies are up to date.
 depsUpToDate :: Int -> Target -> Key -> Bool -> Maybe Stamp -> IO Bool
@@ -136,7 +136,7 @@ depsUpToDate level target key doDebug topLevelStamp = do
   -- redo-always - if an always dependency exists, we need to return False immediately
   alwaysDeps <- hasAlwaysDep key
   if alwaysDeps then return False `debug'` "-dep always"
-  else do 
+  else do
     -- redo-ifcreate - if one of those files was created, we need to return False immediately
     ifCreateDeps <- getIfCreateDeps key
     depCreated' <- mapOr doesTargetExist ifCreateDeps
@@ -146,14 +146,14 @@ depsUpToDate level target key doDebug topLevelStamp = do
       --                 then recursively check their dependencies to see if they are up to date
       ifChangeDeps <- getIfChangeDeps key
       mapAnd (upToDate' (level+1) doDebug topLevelStamp) ifChangeDeps
-  where 
+  where
     debug' status string = if doDebug then debugUpToDate level target status string else status
 
 -- Helper for debugging:
 debugUpToDate :: Int -> Target -> c -> String -> c
 debugUpToDate depth file a string = debug a (createSpaces (depth*2) ++ string ++ createSpaces paddingToAppend ++ " -- " ++ unTarget file)
   where createSpaces num = concat $ replicate num " "
-        stringWidth = 12 
+        stringWidth = 12
         paddingToAppend = stringWidth - length string
 
 -- Function which basically does "and `liftM` mapM" but has the optimization of not continuing evaluation

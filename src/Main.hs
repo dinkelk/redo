@@ -43,7 +43,7 @@ defaultOptions = Options {
   keepGoing = False,
   jobs = 1,
   shuffle = False,
-  noColor = False 
+  noColor = False
 }
 
 -- Define program options:
@@ -105,7 +105,7 @@ printVersion _ = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 201
 
 -- Print the program's help details:
 printHelp :: String -> [OptDescr a] -> [String] -> IO b
-printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts 
+printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts
                                                        exitSuccess
                                                else ioError (userError (concat errs ++ helpStr opts))
   where helpStr = usageInfo $ "Usage: " ++ programName ++ " [OPTION...] targets..."
@@ -118,19 +118,19 @@ getOptions = do
     (o,n,[]  ) -> do o' <- setOptions o
                      return (o',n)
     (_,_,errs) -> do programName <- getProgName
-                     printHelp programName options errs 
+                     printHelp programName options errs
   where setOptions = foldl (>>=) (return defaultOptions)
 
 -- Main function:
 main :: IO ()
-main = do 
-  
+main = do
+
   -- Get program name and arguments:
   progName <- getProgName
 
   -- Parse options, getting a list of option actions:
   (opts, targets) <- getOptions
-  let Options { help = help', 
+  let Options { help = help',
                 dashX = dashX',
                 dashV = dashV',
                 dashD1 = dashD1',
@@ -158,7 +158,7 @@ main = do
 
   -- Set the redo path variable to the current directory for the first call:
   redoInitPath <- lookupEnv "REDO_INIT_PATH" -- Path where redo was initially invoked
-  when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory) 
+  when (isNothing redoInitPath || null (fromJust redoInitPath)) (setEnv "REDO_INIT_PATH" =<< getCurrentDirectory)
 
   -- Get targets to run:
   targetsToRun' <- targetsToRun targets
@@ -191,13 +191,13 @@ mainTop numJobs progName targets = do
   handle <- initializeJobServer numJobs
 
   -- Perform the proper action based on the program name:
-  case progName of 
+  case progName of
     "redo" -> exitWith' handle =<< redo targets'
     "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
     "redo-ood" -> exitWith' handle =<< redoOutOfDate targets
     -- redo-ifcreate and redo-always should only be run inside of a .do file
-    "redo-ifcreate" -> runOutsideDoError progName 
-    "redo-always" -> runOutsideDoError progName 
+    "redo-ifcreate" -> runOutsideDoError progName
+    "redo-always" -> runOutsideDoError progName
     _ -> return ()
   where
     -- If just 'redo' is run, then assume the default target as 'all'
@@ -213,7 +213,7 @@ mainTop numJobs progName targets = do
 mainDo :: String -> [Target] -> IO ()
 mainDo progName targets =
   -- Perform the proper action based on the program name:
-  case progName of 
+  case progName of
     "redo" -> exitWith =<< redo targets
     "redo-ifchange" -> do exitCode <- redoIfChange targets
                           storeIfChangeDependencies targets
@@ -231,5 +231,6 @@ shuffleList lst = shuffle' lst []
     shuffle' [] acc = return acc
     shuffle' l acc =
       do k <- randomRIO (0, length l - 1)
-         let (lead, x:xs) = splitAt k l
-         shuffle' (lead ++ xs) (x:acc)
+         case splitAt k l of
+           (lead, x:xs) -> shuffle' (lead ++ xs) (x:acc)
+           _ -> shuffle' l acc
