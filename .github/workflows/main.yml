@@ -22,7 +22,7 @@ jobs:
       - name: List files in the repository
         run: |
           ls ${{ github.workspace }}
-     - uses: haskell-actions/setup@v2
+      - uses: haskell-actions/setup@v2
         with:
           # ghc-version: '8.8.4' # Exact version of ghc to use
           # cabal-version: 'latest'. Omitted, but defaults to 'latest'
