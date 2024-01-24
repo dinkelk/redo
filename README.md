@@ -20,6 +20,8 @@ Next, clone this repository and run:
 
 in the top level directory. A `bin/` directory will be created with the `redo`, `redo-ifchange`, `redo-ifcreate`, and `redo-always` binaries. Add this `bin/` directory to your path, or copy its contents to a directory on your path, and enjoy!
 
+If you want to try `redo` without compiling, there is a [Dockerfile](docker/) available with `redo` preinstalled. This container also contains the Haskell Stack if you want to make modifications and recompile.
+
 ## Documentation
 
 I try to keep this implementation compatible with [Avery Pennarun](https://github.com/apenwarr/redo)'s Python implementation, plus some bug fixes, and extra features documented in `redo -h`. Thus, the best documentation on `redo` that exists is Avery's [documentation](https://redo.readthedocs.io/en/latest/) via readthedocs.org
