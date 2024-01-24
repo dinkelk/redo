@@ -1,8 +1,8 @@
 # docker
 
-The Dockerfile in this directory contains an environment with `redo` already installed, if you want to quickly try it out. The container also includes the Haskell Stack, so you can make modifications and recompile `redo` easily.
+The Dockerfile in this directory contains an environment with `redo` already installed, if you want to quickly try it out. The container also includes the [Haskell Tool Stack](https://docs.haskellstack.org/en/stable/install_and_upgrade/), so you can make modifications and recompile `redo` easily.
 
-To create the container, first install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and run:
+To create the container, first install [Docker Desktop](https://www.docker.com/products/docker-desktop/), then run:
 
    ```
    $ ./create_container.sh
@@ -23,7 +23,7 @@ The container can be started or stopped via:
   $ ./stop_container.sh
   ```
 
-and recreated from scratch by running:
+and the image can be recreated from scratch by running:
   
   ```
   $ ./build_image.sh
