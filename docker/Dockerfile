@@ -7,42 +7,29 @@
 # For best results use the ./build_image.sh and ./create_container.sh scripts
 # provided in this directory.
 #
-FROM ubuntu:22.04 AS base
+FROM haskell:9.10.2 AS base
 LABEL org.opencontainers.image.source=https://github.com/dinkelk/redo
 LABEL org.opencontainers.image.description="Development environment for redo"
 LABEL org.opencontainers.image.licenses=MIT
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# install common dependencies
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -yq install \
-    software-properties-common \
-    apt-utils \
-    locales \
-    curl \
-    lsb-release \
-    sudo \
-    python3 \
+# Install minimal additional tools and hlint
+RUN apt-get update && apt-get install -y \
     git \
     build-essential \
-    cmake \
-    hlint \
-    && DEBIAN_FRONTEND=noninteractive apt-get -yq clean
+    python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && cabal update \
+    && cabal install hlint --install-method=copy
 
-# ensure we have the en_US.UTF-8 locale available
-RUN locale-gen en_US.UTF-8
-RUN rm /etc/apt/apt.conf.d/docker-clean
+# Copy the local redo source code (with our updates)
+COPY . /root/redo
 
-# Install redo:
-ENV STACK_ROOT=/root/.stack
-RUN DEBIAN_FRONTEND=noninteractive sudo apt-get install -yq wget \
-    && wget -qO- https://get.haskellstack.org/ | sh \
-    && git config --global core.autocrlf false \
-    && git clone https://github.com/dinkelk/redo.git /root/redo \
-    && /root/redo/do /root/redo/all
+# Build redo with updated dependencies
+WORKDIR /root/redo
+RUN ./do all
 
 # Add redo to the root user's path
-RUN echo 'export PATH="/root/redo/bin:$PATH"' >> /root/.bashrc
+ENV PATH="/root/redo/bin:${PATH}"
 
 # Make sure user is root at end.
 USER root
