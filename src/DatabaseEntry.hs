@@ -1,3 +1,4 @@
+{-# LANGUAGE DerivingStrategies #-}
 module DatabaseEntry(Entry(..), doesEntryExist, removeEntry, createEntry, writeEntry, appendEntry, readEntry1, readEntry) where
 
 import System.Directory (listDirectory, doesDirectoryExist)
@@ -11,7 +12,7 @@ import FilePathUtil
 -- This file stores name value pairs as directories. The entry is the
 -- name and is stored as a directory. A list of values can be stored
 -- inside of an entry, represented by nested directories.
-newtype Entry = Entry { entryToFilePath :: FilePath } deriving (Eq, Show) -- The meta directory associated with a target
+newtype Entry = Entry { entryToFilePath :: FilePath } deriving stock (Eq, Show) -- The meta directory associated with a target
 
 ---------------------------------------------------------------------
 -- Existance functions:

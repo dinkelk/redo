@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, DerivingStrategies #-}
 
 module Types(stampTarget, safeStampTarget, doesTargetExist, doesDoFileExist, findDoFile, Stamp(..), DoFile(..), Target(..)) where
 
@@ -17,9 +17,9 @@ import FilePathUtil
 ---------------------------------------------------------------------
 -- Basic Redo Type Definitions:
 ---------------------------------------------------------------------
-newtype Stamp = Stamp { unStamp :: POSIXTime } deriving (Show, Eq, Ord) -- Timestamp or hash stamp of a file
-newtype DoFile = DoFile { unDoFile :: FilePath } deriving (Show, Eq) -- The absolute path to a do file
-newtype Target = Target { unTarget :: FilePath } deriving (Show, Eq) -- The absolute path to a target file
+newtype Stamp = Stamp { unStamp :: POSIXTime } deriving stock (Show, Eq, Ord) -- Timestamp or hash stamp of a file
+newtype DoFile = DoFile { unDoFile :: FilePath } deriving stock (Show, Eq) -- The absolute path to a do file
+newtype Target = Target { unTarget :: FilePath } deriving stock (Show, Eq) -- The absolute path to a target file
 
 -- Common functions that use these types:
 ---------------------------------------------------------------------
