@@ -15,7 +15,8 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: lts-22.6
+resolver: lts-24.0
+system-ghc: true
 
 # Compilation optimization
 ghc-options:
