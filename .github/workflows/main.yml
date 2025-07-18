@@ -16,22 +16,22 @@ jobs:
       - run: echo "🐧 This job is now running on a ${{ runner.os }} server hosted by GitHub!"
       - run: echo "🔎 The name of your branch is ${{ github.ref }} and your repository is ${{ github.repository }}."
       - name: Check out repository code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - run: echo "💡 The ${{ github.repository }} repository has been cloned to the runner."
       - run: echo "🖥️ The workflow is now ready to test your code on the runner."
       - name: List files in the repository
         run: |
           ls ${{ github.workspace }}
-      - uses: haskell-actions/setup@v2
-        with:
-          # ghc-version: '8.8.4' # Exact version of ghc to use
-          # cabal-version: 'latest'. Omitted, but defaults to 'latest'
-          enable-stack: true
-          stack-version: 'latest'
-      - run: ${{ github.workspace }}/do
-      - run: PATH=$PATH:${{ github.workspace }}/bin redo test/all
+      - name: Build Docker image
+        run: docker build -t redo-ci -f docker/Dockerfile .
+      - name: Compile redo in Docker
+        run: docker run --rm -v ${{ github.workspace }}:/workspace --workdir /workspace redo-ci ./do
+      - name: Run hlint in Docker
+        run: docker run --rm -v ${{ github.workspace }}:/workspace --workdir /workspace redo-ci hlint src/
+      - name: Run tests in Docker
+        run: docker run --rm -v ${{ github.workspace }}:/workspace --workdir /workspace redo-ci bash -c "PATH=\$PATH:./bin redo test/all"
       - name: Archive redo binaries
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: redo_bin
           path: ${{ github.workspace }}/bin
