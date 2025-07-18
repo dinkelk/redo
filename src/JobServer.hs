@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, DerivingStrategies #-}
 
 module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, JobServerHandle,
                   waitOnJob, runJob, tryWaitOnJob, returnToken, getToken, Token(..)) where
@@ -20,7 +20,7 @@ import qualified Data.ByteString.Char8 as BS
 import Database
 
 newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd, Fd) }
-newtype Token = Token { unToken :: Char } deriving (Eq, Show)
+newtype Token = Token { unToken :: Char } deriving stock (Eq, Show)
 
 -- Define the character to store in the pipe as a token.
 -- All tokens can be the same.
