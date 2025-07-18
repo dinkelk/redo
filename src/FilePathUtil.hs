@@ -48,7 +48,7 @@ removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath
         removeParents' [] (h:hs) = removeParents' [h] hs
         removeParents' path (h : hs)
           | h == "." = removeParents' path hs
-          | (h == "..") && (last path /= "") = removeParents' (init path) hs
+          | h == ".." && last path /= "" = removeParents' (init path) hs
           | otherwise = removeParents' (path ++ [h]) hs
 
 -- Find the shared root between two paths:

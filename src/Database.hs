@@ -10,7 +10,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash (hashWith, MD5(..), Digest)
-import Data.ByteArray (convert)
+import qualified Data.ByteArray
 import Data.Hex (hex)
 import Data.Bool (bool)
 import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
@@ -305,7 +305,7 @@ withDatabaseLock' tempKey action = do
 -- Create a hash string for a target:
 -- Note: For best results make sure you pass a canonicalized target
 hashString :: Target -> FilePath
-hashString target = hex $ BS.unpack $ convert (hashWith MD5 (BS.pack $ unTarget target) :: Digest MD5)
+hashString target = hex $ BS.unpack $ Data.ByteArray.convert (hashWith MD5 (BS.pack $ unTarget target) :: Digest MD5)
 
 -- Specialized pathify function for making key paths
 keyPathify :: FilePath -> FilePath
@@ -402,9 +402,9 @@ getIfCreateDeps key = withDatabaseLock key func
                   where getIfCreateDeps' entry =
                           catch (do
                             targets <- readEntry entry
-                            return $ map convert targets)
+                            return $ map convertToTarget targets)
                           (\(_ :: SomeException) -> return [])
-                        convert = Target . unescapeFilePath
+                        convertToTarget = Target . unescapeFilePath
 
 -- Get the stored if change dependencies for a target:
 getIfChangeDeps :: Key -> IO [Target]
@@ -414,9 +414,9 @@ getIfChangeDeps key = withDatabaseLock key func
                   where getIfChangeDeps' entry =
                           catch (do
                             targets <- readEntry entry
-                            return $ map convert targets)
+                            return $ map convertToTarget targets)
                           (\(_ :: SomeException) -> return [])
-                        convert = Target . unescapeFilePath
+                        convertToTarget = Target . unescapeFilePath
 
 -- Has the target been marked as errored in the database:
 isErrored :: Key -> IO Bool
