@@ -5,5 +5,8 @@ services:
         build:
             context: ..
             dockerfile: docker/Dockerfile
+            platforms:
+                - linux/amd64
+                - linux/arm64
         container_name: redo_container
         command: sleep infinity
