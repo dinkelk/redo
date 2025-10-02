@@ -5,6 +5,10 @@ services:
         build:
             context: ..
             dockerfile: docker/Dockerfile
+            x-bake:
+                platforms:
+                    - linux/amd64
+                    - linux/arm64
         container_name: redo_container
         volumes:
             - type: bind
