@@ -38,14 +38,15 @@ execute () {
 }
 
 usage() {
-  echo "Usage: $1 [start, stop, login, pull, push, build, buildx, remove]" >&2
+  echo "Usage: $1 [start, stop, login, pull, push, build, buildx, pushx, remove]" >&2
   echo "*  start: create and start the ${PROJECT_NAME} container" >&2
   echo "*  stop: stop the running ${PROJECT_NAME} container" >&2
   echo "*  login: login to the ${PROJECT_NAME} container" >&2
   echo "*  pull: pull the latest image from the Docker registry" >&2
   echo "*  push: push the image to the Docker registry" >&2
   echo "*  build: build the image from the Dockerfile (single platform)" >&2
-  echo "*  buildx: build multi-platform images (linux/amd64, linux/arm64)" >&2
+  echo "*  buildx: build multi-platform images and cache locally" >&2
+  echo "*  pushx: push cached multi-platform images to registry" >&2
   echo "*  remove: remove network and volumes for ${PROJECT_NAME}" >&2
   exit 1
 }
@@ -71,13 +72,18 @@ case $1 in
     execute "${DOCKER_COMPOSE_COMMAND} -f ${DOCKER_COMPOSE_CONFIG} build"
     ;;
   buildx )
-    # Multi-platform build and push to registry
+    # Multi-platform build and cache locally (no push)
     # Requires: docker buildx create --use (run once to set up buildx)
-    IMAGE_NAME="ghcr.io/dinkelk/redo"
-    TAG="${2:-test}"
-    echo "Building multi-platform image: ${IMAGE_NAME}:${TAG}"
-    echo "Platforms: linux/amd64, linux/arm64"
-    execute "docker buildx build --platform linux/amd64,linux/arm64 -t ${IMAGE_NAME}:${TAG} -f ${this_dir}/Dockerfile --push ${this_dir}/.."
+    # Uses docker-compose.yml configuration for platforms and image names
+    echo "Building multi-platform images (platforms and names from docker-compose.yml)"
+    echo "Images will be cached locally. Use 'pushx' to push to registry."
+    execute "BUILDX_BAKE_ENTITLEMENTS_FS=0 docker buildx bake -f ${DOCKER_COMPOSE_CONFIG}"
+    ;;
+  pushx )
+    # Push cached multi-platform images to registry
+    # Uses docker-compose.yml configuration for platforms and image names
+    echo "Pushing multi-platform images to registry (platforms and names from docker-compose.yml)"
+    execute "BUILDX_BAKE_ENTITLEMENTS_FS=0 docker buildx bake -f ${DOCKER_COMPOSE_CONFIG} --push"
     ;;
   remove )
     if [ "$2" == "force" ]
