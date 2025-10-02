@@ -31,8 +31,8 @@ check_dependency "stack"
 ercho
 
 # Install GHC and dependencies:
-stack setup
-stack build
+stack setup --allow-different-user
+stack build --allow-different-user
 
 # Build redo and install it locally in ./bin:
 ercho "Building redo..."
