@@ -1,0 +1,9 @@
+name: redo
+services:
+    redo:
+        image: ghcr.io/dinkelk/redo:latest
+        build:
+            context: ..
+            dockerfile: docker/Dockerfile
+        container_name: redo_container
+        command: sleep infinity
