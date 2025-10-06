@@ -40,20 +40,24 @@ jobs:
         if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v3
 
-      - name: Cache Stack dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.stack
-            .stack-work
-          key: ${{ runner.os }}-${{ matrix.arch }}-stack-${{ hashFiles('stack.yaml', 'redo-haskell.cabal') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-stack-
-
-      - name: Build redo (native amd64)
-        if: matrix.arch == 'amd64'
+      # Build in haskell:9.6, but as the runner's UID/GID so ownership matches
+      - name: Build (amd64 in haskell container; Stack installs exact GHC)
+        if: ${{ matrix.arch == 'amd64' }}
         run: |
-          ./do all
+          mkdir -p .stack-root
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            -e STACK_ROOT=/workspace/.stack-root \
+            -v "$PWD":/workspace -w /workspace \
+            haskell:9.6 \
+            bash -lc '
+              set -euxo pipefail
+              export STACK_ALLOW_DIFFERENT_USER=1
+              # Use system GHC 9.6 from the Docker image
+              git config --global --add safe.directory /workspace || true
+              ./scripts/prepare-stack-for-docker.sh
+              ./do all
+            '
 
       - name: Build redo (cross-compile arm64)
         if: matrix.arch == 'arm64'
@@ -63,7 +67,7 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v $PWD:/workspace \
             -w /workspace \
-            haskell:9.10 \
+            haskell:9.6 \
             bash -c "
               export STACK_ALLOW_DIFFERENT_USER=1 &&
               git config --global --add safe.directory /workspace &&

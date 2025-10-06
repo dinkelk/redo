@@ -21,6 +21,7 @@ executable redo-haskell
   build-depends:       base, containers, directory, filepath, process, time, bytestring, unix, crypton, memory, hex, ansi-terminal, random, filelock, template-haskell
   hs-source-dirs:      src
   default-language:    Haskell2010
+  ghc-options:         -O2
 
 source-repository head
   type:              git
