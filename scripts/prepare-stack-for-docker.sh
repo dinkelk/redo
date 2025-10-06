@@ -8,7 +8,7 @@ sed -i '/^resolver:/a system-ghc: true' stack.yaml
 # Uncomment existing system-ghc line if present (for idempotency)
 sed -i 's/^# system-ghc: true/system-ghc: true/' stack.yaml
 
-# Allow newer minor versions of GHC than specified in the resolver
-sed -i 's/^# compiler-check: newer-minor/compiler-check: newer-minor/' stack.yaml
+# Skip GHC version check - use whatever system GHC is available
+sed -i '/^resolver:/a skip-ghc-check: true' stack.yaml
 
 echo "stack.yaml prepared for Docker build with system GHC"

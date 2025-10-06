@@ -63,7 +63,7 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v $PWD:/workspace \
             -w /workspace \
-            haskell:9.6 \
+            haskell:9.10 \
             bash -c "
               export STACK_ALLOW_DIFFERENT_USER=1 &&
               git config --global --add safe.directory /workspace &&
