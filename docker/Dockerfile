@@ -1,48 +1,46 @@
 #
-# This Dockerfile needs to be run from within the project/ directory (AKA ../../ from here)
-# so that docker has access to all the files it needs. ie.
+# Dockerfile for redo development environment
 #
-# $ docker build -t $DOCKER_IMAGE_NAME -f redo/docker/Dockerfile .
+# Build from project root:
+#   docker build -t redo-dev -f docker/Dockerfile .
 #
-# For best results use the ./build_image.sh and ./create_container.sh scripts
-# provided in this directory.
+# Run interactively:
+#   docker run -it --rm -v $PWD:/workspace -w /workspace redo-dev bash
 #
-FROM ubuntu:22.04 AS base
+FROM ubuntu:22.04
 LABEL org.opencontainers.image.source=https://github.com/dinkelk/redo
 LABEL org.opencontainers.image.description="Development environment for redo"
 LABEL org.opencontainers.image.licenses=MIT
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# install common dependencies
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -yq install \
-    software-properties-common \
-    apt-utils \
-    locales \
+# Install dependencies (same as CI workflow)
+RUN apt-get update && apt-get install -y \
     curl \
-    lsb-release \
-    sudo \
-    python3 \
     git \
     build-essential \
-    cmake \
-    hlint \
-    && DEBIAN_FRONTEND=noninteractive apt-get -yq clean
+    libgmp-dev \
+    zlib1g-dev \
+    libtinfo-dev \
+    libffi-dev \
+    libncurses-dev \
+    python3 \
+    gcc \
+    wget \
+    xz-utils \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# ensure we have the en_US.UTF-8 locale available
-RUN locale-gen en_US.UTF-8
-RUN rm /etc/apt/apt.conf.d/docker-clean
+# Install hlint (may not be available on all architectures)
+RUN apt-get update && (apt-get install -y hlint || echo "hlint not available via apt") \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install redo:
-ENV STACK_ROOT=/root/.stack
-RUN DEBIAN_FRONTEND=noninteractive sudo apt-get install -yq wget \
-    && wget -qO- https://get.haskellstack.org/ | sh \
-    && git config --global core.autocrlf false \
-    && git clone https://github.com/dinkelk/redo.git /root/redo \
-    && /root/redo/do /root/redo/all
+# Install Stack
+RUN curl -sSL https://get.haskellstack.org/ | sh
 
-# Add redo to the root user's path
-RUN echo 'export PATH="/root/redo/bin:$PATH"' >> /root/.bashrc
+# Set working directory
+WORKDIR /workspace
 
-# Make sure user is root at end.
-USER root
+# Default command
+CMD ["/bin/bash"]
