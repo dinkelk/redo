@@ -76,7 +76,9 @@ initializeJobServer n = do
 getJobServer :: IO JobServerHandle
 getJobServer = do flags <- getEnv "REDO_JOB_SERVER_PIPE"
                   let handle = handle' flags
-                  return $ JobServerHandle (Fd $ head handle, Fd $ handle !! 1, Fd $ handle !! 2)
+                  case handle of
+                    (fd1:fd2:fd3:_) -> return $ JobServerHandle (Fd fd1, Fd fd2, Fd fd3)
+                    _ -> error "getJobServer: invalid REDO_JOB_SERVER_PIPE format"
   where handle' flags = map convert (splitBy ',' flags)
         convert a = read a :: CInt
 
@@ -157,7 +159,9 @@ getToken handle = void $ readToken r
 -- Blocking read the next token from the pipe:
 readToken :: Fd -> IO Token
 readToken fd = do token <- fdRead fd 1
-                  return $ Token $ head $ BS.unpack token
+                  case BS.unpack token of
+                    (t:_) -> return $ Token t
+                    [] -> error "readToken: empty token read"
 
 -- Return a token to the pipe:
 returnToken :: JobServerHandle -> IO ()

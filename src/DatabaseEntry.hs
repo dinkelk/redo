@@ -50,7 +50,9 @@ appendEntry entry contents =
 readEntry1 :: Entry -> IO String
 readEntry1 entry = do
   contents <- listDirectory entry'
-  return $ head contents
+  case contents of
+    (x:_) -> return x
+    [] -> error $ "readEntry1: empty directory " ++ entry'
   where entry' = entryToFilePath entry
 
 -- Read all of the values from an entry
