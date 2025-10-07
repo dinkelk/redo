@@ -34,9 +34,9 @@ unescapeFilePath string = first : unescapeFilePath rest
         (first, rest) = repl string
         repl [] = ('\0',"")
         repl (x:xs) = if x == seperator_replacement
-                      then if head xs == seperator_replacement_escape
-                           then (seperator_replacement, tail xs)
-                           else (pathSeparator, xs)
+                      then case xs of
+                             (y:ys) | y == seperator_replacement_escape -> (seperator_replacement, ys)
+                             _ -> (pathSeparator, xs)
                       else (x, xs)
 
 -- Removes ".." and "." directories when possible:
@@ -48,7 +48,7 @@ removeDotDirs filePath = joinPath $ removeParents' [] (splitDirectories filePath
         removeParents' [] (h:hs) = removeParents' [h] hs
         removeParents' path (h : hs)
           | h == "." = removeParents' path hs
-          | (h == "..") && (last path /= "") = removeParents' (init path) hs
+          | h == ".." && last path /= "" = removeParents' (init path) hs
           | otherwise = removeParents' (path ++ [h]) hs
 
 -- Find the shared root between two paths:

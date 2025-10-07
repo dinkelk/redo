@@ -15,7 +15,15 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: lts-22.6
+#
+# NOTE: Using lts-22.39 (GHC 9.6.6) instead of latest lts-24.14 (GHC 9.10.3)
+# because GHC 9.10+ has a ticker polling bug that causes thousands of
+# "Ticker: poll failed: Interrupted system call" warnings during redo builds.
+# The RTS option -with-rtsopts=-V0 does not work with Stack (options are not
+# embedded in the binary even when specified in cabal file). GHC 9.6.6 does
+# not have this ticker issue and works perfectly.
+# See: https://gitlab.haskell.org/ghc/ghc/-/commit/3a0642eada4086360b329dde07045661d90a495f
+resolver: lts-22.39
 
 # Compilation optimization
 ghc-options:

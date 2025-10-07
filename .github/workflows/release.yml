@@ -1,0 +1,162 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux-amd64
+            arch: amd64
+          - platform: linux-arm64
+            arch: arm64
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Setup Haskell Stack
+        uses: haskell-actions/setup@v2
+        with:
+          enable-stack: true
+          stack-version: 'latest'
+
+      - name: Set up QEMU for cross-platform builds
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+
+      # Build in haskell:9.6, but as the runner's UID/GID so ownership matches
+      - name: Build (amd64 in haskell container; Stack installs exact GHC)
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          mkdir -p .stack-root
+          docker run --rm --platform linux/amd64 \
+            --user "$(id -u):$(id -g)" \
+            -e STACK_ROOT=/workspace/.stack-root \
+            -v "$PWD":/workspace -w /workspace \
+            haskell:9.6 \
+            bash -lc '
+              set -euxo pipefail
+              export STACK_ALLOW_DIFFERENT_USER=1
+              # Use system GHC 9.6 from the Docker image
+              git config --global --add safe.directory /workspace || true
+              ./scripts/prepare-stack-for-docker.sh
+              ./do all
+            '
+
+      - name: Build redo (cross-compile arm64)
+        if: matrix.arch == 'arm64'
+        timeout-minutes: 120
+        run: |
+          # Use official Haskell image with ARM64 support (slow due to QEMU emulation)
+          docker run --rm --platform linux/arm64 \
+            -v $PWD:/workspace \
+            -w /workspace \
+            haskell:9.6 \
+            bash -c "
+              export STACK_ALLOW_DIFFERENT_USER=1 &&
+              git config --global --add safe.directory /workspace &&
+              stack --allow-different-user config set system-ghc --global true &&
+              stack --allow-different-user config set install-ghc --global false &&
+              ./scripts/prepare-stack-for-docker.sh &&
+              ./do all
+            "
+
+      - name: Verify binaries exist
+        run: |
+          ls -lah bin/
+          file bin/redo
+
+      - name: Create release archive
+        run: |
+          cd bin
+          tar -czf ../redo-${{ matrix.platform }}.tar.gz *
+          cd ..
+          sha256sum redo-${{ matrix.platform }}.tar.gz > redo-${{ matrix.platform }}.tar.gz.sha256
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: redo-${{ matrix.platform }}
+          path: |
+            redo-${{ matrix.platform }}.tar.gz
+            redo-${{ matrix.platform }}.tar.gz.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.tar.gz*" -exec cp {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: release-assets/*
+          body: |
+            ## Release ${{ steps.tag.outputs.tag }}
+
+            ### Installation
+
+            Download the appropriate archive for your platform:
+            - `redo-linux-amd64.tar.gz` - Linux x86_64
+            - `redo-linux-arm64.tar.gz` - Linux ARM64
+
+            ```bash
+            # Download and extract (replace PLATFORM with your platform)
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/redo-PLATFORM.tar.gz
+            tar -xzf redo-PLATFORM.tar.gz
+
+            # Optionally, move to a directory in your PATH
+            sudo mv redo* /usr/local/bin/
+            ```
+
+            ### Verification
+
+            SHA256 checksums are provided for each archive:
+            ```bash
+            sha256sum -c redo-PLATFORM.tar.gz.sha256
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

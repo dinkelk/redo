@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, DerivingStrategies #-}
 
 module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep, getIfCreateDeps,
                  getIfChangeDeps, storePhonyTarget, markClean, storeIfCreateDep, markDirty, storeStamp,
@@ -9,7 +9,8 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
-import Crypto.Hash.MD5 (hash)
+import Crypto.Hash (hashWith, MD5(..), Digest)
+import qualified Data.ByteArray
 import Data.Hex (hex)
 import Data.Bool (bool)
 import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDirectoryExist)
@@ -27,8 +28,8 @@ import Types
 ---------------------------------------------------------------------
 -- Type Definitions:
 ---------------------------------------------------------------------
-newtype Key = Key { keyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
-newtype TempKey = TempKey { tempKeyToFilePath :: FilePath } deriving (Show, Eq) -- The database key for a target
+newtype Key = Key { keyToFilePath :: FilePath } deriving stock (Show, Eq) -- The database key for a target
+newtype TempKey = TempKey { tempKeyToFilePath :: FilePath } deriving stock (Show, Eq) -- The database key for a target
 
 ---------------------------------------------------------------------
 -- Root database directory getters:
@@ -304,7 +305,7 @@ withDatabaseLock' tempKey action = do
 -- Create a hash string for a target:
 -- Note: For best results make sure you pass a canonicalized target
 hashString :: Target -> FilePath
-hashString target = hex $ BS.unpack $ hash $ BS.pack $ unTarget target
+hashString target = hex $ BS.unpack $ Data.ByteArray.convert (hashWith MD5 (BS.pack $ unTarget target) :: Digest MD5)
 
 -- Specialized pathify function for making key paths
 keyPathify :: FilePath -> FilePath
@@ -401,9 +402,9 @@ getIfCreateDeps key = withDatabaseLock key func
                   where getIfCreateDeps' entry =
                           catch (do
                             targets <- readEntry entry
-                            return $ map convert targets)
+                            return $ map convertToTarget targets)
                           (\(_ :: SomeException) -> return [])
-                        convert = Target . unescapeFilePath
+                        convertToTarget = Target . unescapeFilePath
 
 -- Get the stored if change dependencies for a target:
 getIfChangeDeps :: Key -> IO [Target]
@@ -413,9 +414,9 @@ getIfChangeDeps key = withDatabaseLock key func
                   where getIfChangeDeps' entry =
                           catch (do
                             targets <- readEntry entry
-                            return $ map convert targets)
+                            return $ map convertToTarget targets)
                           (\(_ :: SomeException) -> return [])
-                        convert = Target . unescapeFilePath
+                        convertToTarget = Target . unescapeFilePath
 
 -- Has the target been marked as errored in the database:
 isErrored :: Key -> IO Bool

@@ -167,44 +167,44 @@ redoOutOfDate = buildTargets redoOutOfDate'
 -- the files under lock contention.
 buildTargets :: (Target -> IO ExitCode) -> [Target] -> IO ExitCode
 buildTargets buildFunc targets = do
-  let len = length targets
   -- If there is no target, just return a good exit code
-  if len == 0 then return ExitSuccess
-  -- If there is only one target, then just run it on this thread:
-  else if len == 1 then do
-    handle <- getJobServer
-    runBuild handle (head targets)
-  -- If there are multiple targets, try to run things in parallel
-  else do
-    handle <- getJobServer
-    -- Get the keep going variable:
-    keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
-    let keepGoing' = fromMaybe "" keepGoing''
-    let keepGoing = not $ null keepGoing'
+  case targets of
+    [] -> return ExitSuccess
+    -- If there is only one target, then just run it on this thread:
+    [target] -> do
+      handle <- getJobServer
+      runBuild handle target
+    -- If there are multiple targets, try to run things in parallel
+    _ -> do
+      handle <- getJobServer
+      -- Get the keep going variable:
+      keepGoing'' <- lookupEnv "REDO_KEEP_GOING" -- Variable to tell redo to keep going even on failure
+      let keepGoing' = fromMaybe "" keepGoing''
+      let keepGoing = not $ null keepGoing'
 
-    -- Try to lock file and build all targets and accumulate list of unbuilt targets:
-    results <- mapM1 keepGoing (tryBuild handle) targets
-    let (remainingTargets, processStatus) = unzip results
-    let exitCodes = rights processStatus
-    let processIDs = lefts processStatus
+      -- Try to lock file and build all targets and accumulate list of unbuilt targets:
+      results <- mapM1 keepGoing (tryBuild handle) targets
+      let (remainingTargets, processStatus) = unzip results
+      let exitCodes = rights processStatus
+      let processIDs = lefts processStatus
 
-    -- Exit immediately if something failed:
-    maybe (do
-      -- Give up token while we wait on all jobs to complete:
-      returnToken handle
-      remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
-      -- Get token again before we continue:
-      getToken handle
       -- Exit immediately if something failed:
       maybe (do
-        -- Wait to acquire the lock, and build the remaining unbuilt files
-        finalExitCodes <- mapM2 keepGoing (waitBuild handle) remainingTargets
-        -- Make sure we wait on all jobs and gather the exit codes before returning:
-        returnExitCode finalExitCodes
+        -- Give up token while we wait on all jobs to complete:
+        returnToken handle
+        remainingExitCodes <- mapM2 keepGoing waitOnJob processIDs
+        -- Get token again before we continue:
+        getToken handle
+        -- Exit immediately if something failed:
+        maybe (do
+          -- Wait to acquire the lock, and build the remaining unbuilt files
+          finalExitCodes <- mapM2 keepGoing (waitBuild handle) remainingTargets
+          -- Make sure we wait on all jobs and gather the exit codes before returning:
+          returnExitCode finalExitCodes
+          )
+          return (getFailingExitCode remainingExitCodes)
         )
-        return (getFailingExitCode remainingExitCodes)
-      )
-      return (getFailingExitCode exitCodes)
+        return (getFailingExitCode exitCodes)
   where
     -- Try to build a target using the job server, otherwise return the unbuild target with the lock file name:
     tryBuild :: JobServerHandle -> Target -> IO ((Target, FilePath), Either ProcessID ExitCode)

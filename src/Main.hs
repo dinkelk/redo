@@ -16,6 +16,7 @@ import Database
 import PrettyPrint
 import Build
 import Types
+import Version
 
 -- Redo options:
 data Options = Options {
@@ -100,7 +101,7 @@ setNoColor opt = return opt { noColor = True }
 
 -- Print the program version and license information:
 printVersion :: Options -> IO Options
-printVersion _ = do putStrLn "Redo 0.1\nThe MIT License (MIT)\nCopyright (c) 2015"
+printVersion _ = do putStrLn versionString
                     exitSuccess
 
 -- Print the program's help details:
