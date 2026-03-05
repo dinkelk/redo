@@ -17,6 +17,7 @@ import PrettyPrint
 import Build
 import Types
 import Version
+import FilePathUtil
 
 -- Redo options:
 data Options = Options {
@@ -196,6 +197,11 @@ mainTop numJobs progName targets = do
     "redo" -> exitWith' handle =<< redo targets'
     "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
     "redo-ood" -> exitWith' handle =<< redoOutOfDate targets
+    "redo-done" -> case targets of
+      [] -> do putWarningStrLn "Usage: redo-done <target> <dep1> <dep2> ..."
+               exitFailure
+      (t:deps) -> do absTarget <- Target <$> canonicalizePath' (unTarget t)
+                     exitWith' handle =<< redoDone absTarget deps
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName
     "redo-always" -> runOutsideDoError progName
@@ -220,6 +226,14 @@ mainDo progName targets =
                           storeIfChangeDependencies targets
                           exitWith exitCode
     "redo-ood" -> exitWith =<< redoOutOfDate targets
+    "redo-done" -> case targets of
+      [] -> do putWarningStrLn "Usage: redo-done <target> <dep1> <dep2> ..."
+               exitFailure
+      (t:deps) -> do absTarget <- Target <$> canonicalizePath' (unTarget t)
+                     exitCode <- redoDone absTarget deps
+                     -- Also store as a dependency of the parent if run inside a .do file
+                     storeIfChangeDependencies [t]
+                     exitWith exitCode
     "redo-ifcreate" -> storeIfCreateDependencies targets
     "redo-always" -> storeAlwaysDependency
     _ -> return ()

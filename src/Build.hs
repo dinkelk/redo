@@ -1,10 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Build(redo, redoIfChange, redoOutOfDate, isRunFromDoFile, storeIfChangeDependencies, storeIfCreateDependencies,
+module Build(redo, redoIfChange, redoOutOfDate, redoDone, isRunFromDoFile, storeIfChangeDependencies, storeIfCreateDependencies,
              storeAlwaysDependency) where
 
 -- System imports:
-import Control.Monad (when)
+import Control.Monad (when, unless)
 import Control.Exception (catch, SomeException(..), displayException)
 import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
@@ -12,7 +12,7 @@ import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
 import Data.Bool (bool)
 import System.Directory (doesDirectoryExist, renameFile, renameDirectory, removeFile, getCurrentDirectory, copyFile, createDirectoryIfMissing, listDirectory)
 import System.Environment (getEnvironment, lookupEnv, getEnv)
-import System.Exit (ExitCode(..))
+import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
@@ -26,6 +26,65 @@ import JobServer
 import UpToDate
 import PrettyPrint
 import FilePathUtil
+
+-- Mark a target as done (built externally) with given dependencies.
+-- Usage: redo-done <target> <dep1> <dep2> ...
+-- This registers the target as built without running its .do file,
+-- stores the given dependencies, and stamps the target.
+redoDone :: Target -> [Target] -> IO ExitCode
+redoDone target deps = do
+  let key = getKey target
+  let tempKey = getTempKey target
+
+  -- Verify the target exists on disk
+  exists <- doesTargetExist target
+  unless exists $ do
+    putErrorStrLn $ "Error: redo-done target '" ++ unTarget target ++ "' does not exist on disk."
+    exitFailure
+
+  -- Look up the existing .do file for this target (option b)
+  maybeDoFile <- findDoFile target
+  case maybeDoFile of
+    Nothing -> do
+      putErrorStrLn $ "Error: No .do file found for target '" ++ unTarget target ++ "'."
+      exitFailure
+    Just doFile -> do
+      -- Initialize the target database with the .do file (this refreshes deps)
+      initializeTargetDatabase key doFile
+
+      -- Initialize the .do file itself as a source (redo tracks .do files as deps)
+      let doFileTarget = Target (unDoFile doFile)
+      let doFileKey = getKey doFileTarget
+      initializeSourceDatabase doFileKey doFileTarget
+
+      -- Canonicalize and store all dependencies
+      parentRedoPath <- getCurrentDirectory
+      canonicalizedDeps <- mapM (canonicalize parentRedoPath) deps
+      mapM_ (storeIfChangeDep key) canonicalizedDeps
+
+      -- For each dep that is a source file (not a redo target), initialize
+      -- its source database so redo recognizes it as a known source.
+      mapM_ initializeSourceIfNeeded canonicalizedDeps
+
+      -- Stamp the target with current mtime
+      stamp <- stampTarget target
+      storeStamp key stamp
+
+      -- Mark as built in the session cache
+      markBuilt tempKey
+
+      return ExitSuccess
+  where
+    canonicalize path dep = do cpath <- canonicalizePath' $ path </> unTarget dep
+                               return $ Target cpath
+    -- Initialize a source database for a dependency if it exists on disk
+    -- and doesn't already have a redo database (i.e., it's a source file).
+    initializeSourceIfNeeded dep = do
+      let depKey = getKey dep
+      hasDB <- doesDatabaseExist depKey
+      unless hasDB $ do
+        exists <- doesTargetExist dep
+        when exists $ initializeSourceDatabase depKey dep
 
 -- Store dependencies for redo-ifchange:
 storeIfChangeDependencies :: [Target] -> IO ()
