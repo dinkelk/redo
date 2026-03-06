@@ -5,7 +5,8 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty,
                  initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey,
                  TempKey(..), Key(..), initializeSession, getTargetLockFile, getJobServerPipe,
-                 getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
+                 getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored,
+                 getTargetInfo, TargetInfo(..)) where
 
 import Control.Exception (catch, SomeException(..))
 import qualified Data.ByteString.Char8 as BS
@@ -371,6 +372,14 @@ createRedoTempDirectory = do
 ---------------------------------------------------------------------
 -- Create meta data folder for storing hashes and/or timestamps and return the folder name
 -- We store a dependency for the target on the do file
+---------------------------------------------------------------------
+-- Re-export TargetInfo from SqliteDb
+---------------------------------------------------------------------
+-- | Get all target info in one SQLite query (avoids multiple round-trips)
+getTargetInfo :: Key -> IO (Maybe TargetInfo)
+getTargetInfo key = withRedoDb $ \db ->
+  dbGetTargetInfo db (keyText key)
+
 ---------------------------------------------------------------------
 -- Persistent database functions (SQLite-backed):
 ---------------------------------------------------------------------

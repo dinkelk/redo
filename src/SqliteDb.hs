@@ -19,6 +19,8 @@ module SqliteDb
   , dbMarkErrored
   , dbStorePhony
   , dbGetPhony
+  , dbGetTargetInfo
+  , TargetInfo(..)
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -234,6 +236,33 @@ dbMarkErrored db key =
 dbStorePhony :: Database -> Text -> Text -> IO ()
 dbStorePhony db key phony =
   execBind db "INSERT INTO targets(key,phony) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET phony=?2" [SQLText key, SQLText phony]
+
+-- Batch query: get all target info in one round trip
+data TargetInfo = TargetInfo
+  { tiExists    :: Bool
+  , tiIsSource  :: Bool
+  , tiIsErrored :: Bool
+  , tiStamp     :: Maybe Text
+  , tiDoFile    :: Maybe Text
+  , tiPhony     :: Maybe Text
+  , tiAlwaysDep :: Bool
+  } deriving (Show)
+
+dbGetTargetInfo :: Database -> Text -> IO (Maybe TargetInfo)
+dbGetTargetInfo db key = do
+  row <- queryOne db "SELECT is_source,is_errored,stamp,do_file,phony,always_dep FROM targets WHERE key=?1 LIMIT 1" [SQLText key]
+  case row of
+    [SQLInteger src, SQLInteger err, stampV, doV, phonyV, SQLInteger always] ->
+      return $ Just $ TargetInfo
+        { tiExists    = True
+        , tiIsSource  = src == 1
+        , tiIsErrored = err == 1
+        , tiStamp     = case stampV of { SQLText t -> Just t; _ -> Nothing }
+        , tiDoFile    = case doV of { SQLText t -> Just t; _ -> Nothing }
+        , tiPhony     = case phonyV of { SQLText t -> Just t; _ -> Nothing }
+        , tiAlwaysDep = always == 1
+        }
+    _ -> return Nothing
 
 dbGetPhony :: Database -> Text -> IO (Maybe Text)
 dbGetPhony db key = do

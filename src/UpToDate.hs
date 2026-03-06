@@ -4,8 +4,10 @@ module UpToDate (upToDate) where
 import Data.Maybe (isNothing, fromJust)
 import System.FilePath (takeExtension)
 
+import qualified Data.Text as T
 import Types
 import Database
+import SqliteDb (TargetInfo(..))
 
 -- This module provides a single function which returns whether a
 -- redo target needs to be rebuilt or if the target is up to date.
@@ -37,17 +39,14 @@ upToDate' level doDebug topLevelStamp target = upToDate'' level doDebug topLevel
 upToDate'' :: Int -> Bool -> Maybe Stamp -> Key -> TempKey -> Target -> IO Bool
 upToDate'' level doDebug topLevelStamp key tempKey target = do
   return () `debug'` "=checking"
-  databaseExists <- doesDatabaseExist key
-  -- If there is no database for this target and it doesn't exist than it has never been built, or it is
-  -- a source file that we have never seen before. Either way, return False.
-  if not databaseExists then return False `debug'` "-new target"
+  -- Batch query: get all target info in one SQLite round-trip
+  mInfo <- getTargetInfo key
+  if isNothing mInfo then return False `debug'` "-new target"
   else do
-    -- If the target was built in error last time, then it is not up to date.
-    errored <- isErrored key
-    if errored then return False `debug'` "-errored"
+    let info = fromJust mInfo
+    if tiIsErrored info then return False `debug'` "-errored"
     else do
       existingTarget <- getBuiltTargetPath key target
-      -- If neither a target or a phony target exists, then the target is obviously not up to date
       if isNothing existingTarget then return False `debug'` "-not built"
       else do
         built <- isBuilt tempKey
