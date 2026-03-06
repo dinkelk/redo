@@ -49,11 +49,12 @@ withRedoDb action = do
       dir <- getAppUserDataDirectory "redo"
       createDirectoryIfMissing True dir
       db <- open (T.pack $ dir </> "redo.sqlite3")
-      -- WAL mode allows concurrent readers + one writer
-      exec db "PRAGMA journal_mode=WAL"
-      exec db "PRAGMA synchronous=NORMAL"
+      -- Set busy_timeout FIRST so subsequent statements retry on lock
       exec db "PRAGMA busy_timeout=5000"
-      initSchema db
+      -- WAL mode allows concurrent readers + one writer
+      retryOnBusy $ exec db "PRAGMA journal_mode=WAL"
+      exec db "PRAGMA synchronous=NORMAL"
+      retryOnBusy $ initSchema db
       writeIORef cachedConn (Just db)
       action db
 
