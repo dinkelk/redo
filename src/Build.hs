@@ -15,8 +15,8 @@ import System.Environment (getEnvironment, lookupEnv, getEnv)
 import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
-import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
-import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
+import System.IO (withFile, IOMode(..), hFileSize, hGetLine, openFile, hClose)
+import System.Process (createProcess, waitForProcess, shell, proc, CreateProcess(..), StdStream(..))
 import System.Posix.Types (ProcessID)
 
 -- Local imports:
@@ -386,12 +386,15 @@ runDoFile key tempKey target currentTimeStamp doFile = do
   tmp3 <- getTempFile target
   tmpStdout <- getStdoutFile target
 
-  -- Construct the shell command:
-  cmd <- shellCmd shellArgs doFile target tmp3 tmpStdout
+  -- Parse shebang and construct args for direct process execution:
+  (interpCmd, interpArgs) <- parseShebang shellArgs doFile
+  let doArgs = interpArgs ++ [unDoFile doFile, targetRel2Do', arg2', tmp3]
   targetIsDirectory <- doesDirectoryExist $ unTarget target
 
   -- Print what we are currently "redoing"
   putRedoInfo target
+  -- Construct the equivalent shell command string for debug printing
+  let cmd = unwords $ [interpCmd] ++ interpArgs ++ map quote [unDoFile doFile, targetRel2Do', arg2', tmp3] ++ [">", quote tmpStdout]
   when (not (null shellArgs) || not (null dashD1)) (putUnformattedStrLn $ "* " ++ cmd)
 
   -- Create the target database:
@@ -416,8 +419,15 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
+  -- Use proc directly instead of shell to avoid double-shell (sh -c "sh -e ...")
+  stdoutHandle <- openFile tmpStdout WriteMode
+  (_, _, _, processHandle) <- createProcess $ (proc interpCmd doArgs)
+    { env = Just newEnv
+    , cwd = Just redoPath
+    , std_out = UseHandle stdoutHandle
+    }
   exit <- waitForProcess processHandle
+  hClose stdoutHandle
   case exit of
     ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory
                       -- If the target exists, then store the target stamp
@@ -447,7 +457,7 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                                         safeRemoveTempFile tmpStdout
 
     -- Temporary file names:
-    redoPath = takeDirectory $ unDoFile doFile
+    (redoPath, targetRel2Do', arg2') = computeDoArgs doFile target
 
     -- Move temp files to target after creation:
     moveTempFiles :: FilePath -> FilePath -> Bool -> IO Int
@@ -537,36 +547,27 @@ runDoFile key tempKey target currentTimeStamp doFile = do
 -- $1 - the target name
 -- $2 - the target basename
 -- $3 - the temporary target name
-shellCmd :: String -> DoFile -> Target -> FilePath -> FilePath -> IO String
-shellCmd shellArgs doFile target tmp3 tmpStdout = do
-  shebang <- readShebang doFile
-  return $ unwords [shebang, quote $ unDoFile doFile, quote targetRel2Do, quote arg2, quote tmp3, ">", quote tmpStdout]
+-- Parse the shebang line into (command, args) for direct execution
+parseShebang :: String -> DoFile -> IO (String, [String])
+parseShebang shellArgs file = do
+  firstLine <- catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
+  let shebang = if take 2 firstLine == "#!" then drop 2 firstLine else "/bin/sh -e" ++ shellArgs
+  case words shebang of
+    []     -> return ("/bin/sh", ["-e" ++ shellArgs])
+    (c:as) -> return (c, as)
+
+-- Compute target-relative-to-do and arg2 for a do file invocation
+computeDoArgs :: DoFile -> Target -> (FilePath, String, String)
+computeDoArgs doFile target = (redoPath, targetRel2Do, arg2)
   where
-    -- The second argument $2 is a tricky one. Traditionally, $2 is supposed to be the targetRel2Do name with the extension removed.
-    -- What exactly constitutes the "extension" of a file can be debated. After much grudging... this implementation is now
-    -- compatible with the python implementation of redo. The value of arg2 depends on if the do file run is a default<.extensions>.do
-    -- file or a <targetRel2DoName>.do file. For example the $2 for "redo file.x.y.z" run from different .do files is shown below:
-    --
-    --    .do file name |         $2  | description
-    --    file.x.y.z.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
-    -- default.x.y.z.do |       file  | we know .x.y.z is the extension, so remove it
-    --   default.y.z.do |     file.x  | we know .y.z is the extension, so remove it
-    --     default.z.do |   file.x.y  | we know .z is the extension, so remove it
-    --       default.do | file.x.y.z  | we do not know what part of the file is the extension... so we leave the entire thing
-    --
     redoPath = takeDirectory $ unDoFile doFile
     targetRel2Do = makeRelative' redoPath (unTarget target)
-    quote string = "\"" ++ string ++ "\""
     arg2 = if (dropExtensions . takeFileName . unDoFile) doFile == "default" then createArg2 targetRel2Do doExtensions else targetRel2Do
-    doExtensions = (takeExtensions . dropExtension . unDoFile) doFile -- remove .do, then grab the rest of the extensions
+    doExtensions = (takeExtensions . dropExtension . unDoFile) doFile
     createArg2 fname extension = if null extension then fname else createArg2 (dropExtension fname) (dropExtension extension)
-    -- Read the shebang from a file and use that as the command. This allows us to run redo files that are in a language
-    -- other than shell, ie. python or perl
-    readShebang :: DoFile -> IO String
-    readShebang file = readFirstLine >>= extractShebang
-      where
-        readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
-        extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
+
+quote :: String -> String
+quote string = "\"" ++ string ++ "\""
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()
