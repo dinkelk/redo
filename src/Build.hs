@@ -16,7 +16,8 @@ import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine, openFile, hClose)
-import System.Process (createProcess, waitForProcess, shell, proc, CreateProcess(..), StdStream(..))
+import System.Process (createProcess, waitForProcess, shell, proc, CreateProcess(..), StdStream(..), terminateProcess, ProcessHandle)
+import Control.Exception (bracket, onException)
 import System.Posix.Types (ProcessID)
 
 -- Local imports:
@@ -426,7 +427,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
     , cwd = Just redoPath
     , std_out = UseHandle stdoutHandle
     }
-  exit <- waitForProcess processHandle
+  -- If we're interrupted while waiting, terminate the child process group
+  exit <- waitForProcess processHandle `onException` cleanupChild processHandle
   hClose stdoutHandle
   case exit of
     ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory
@@ -568,6 +570,10 @@ computeDoArgs doFile target = (redoPath, targetRel2Do, arg2)
 
 quote :: String -> String
 quote string = "\"" ++ string ++ "\""
+
+-- Terminate a child process and its process group on cleanup:
+cleanupChild :: ProcessHandle -> IO ()
+cleanupChild ph = catch (terminateProcess ph) (\(_ :: SomeException) -> return ())
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()

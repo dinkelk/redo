@@ -1,13 +1,19 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- System imports:
-import Control.Monad (unless, when)
+import Control.Concurrent (threadDelay)
+import Control.Monad (unless, when, void)
+import Control.Exception (catch, throw, SomeException(..))
 import Data.List (intercalate)
 import Data.Maybe (isNothing, fromJust, fromMaybe)
 import System.Console.GetOpt
-import System.Directory (getCurrentDirectory)
+import System.Directory (getCurrentDirectory, listDirectory, doesFileExist)
 import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
-import System.Exit (exitSuccess, exitFailure, exitWith)
+import System.Exit (ExitCode(..), exitSuccess, exitFailure, exitWith)
+import System.IO (hGetContents, IOMode(..), withFile)
+import System.Posix.Process (getProcessID, getProcessGroupID, exitImmediately)
+import System.Posix.Signals (Signal, sigINT, signalProcessGroup, signalProcess)
+import System.Posix.Types (ProcessID)
 import System.Random (randomRIO)
 
 -- Local imports:
@@ -185,13 +191,93 @@ main = do
     mainToRun numJobs = do runFromDoFile <- isRunFromDoFile
                            return $ if runFromDoFile then mainDo else mainTop numJobs
 
+-- Kill all descendant processes by walking /proc (twice, to catch stragglers)
+killDescendants :: ProcessID -> Signal -> IO ()
+killDescendants rootPid sig = do
+  -- First pass: kill all known descendants
+  killPass rootPid sig
+  -- Brief delay to let signals propagate and zombies appear
+  Control.Concurrent.threadDelay 100000  -- 100ms
+  -- Second pass: catch any new children that spawned before first pass completed
+  killPass rootPid sig
+  -- Also try killing the entire process group
+  catch (signalProcessGroup sig =<< getProcessGroupID)
+        (\(_ :: SomeException) -> return ())
+
+killPass :: ProcessID -> Signal -> IO ()
+killPass rootPid sig = do
+  descendants <- getDescendants rootPid
+  mapM_ (\p -> catch (signalProcess sig p) (\(_ :: SomeException) -> return ())) (reverse descendants)
+
+-- Walk /proc to find all descendant PIDs of a given PID
+getDescendants :: ProcessID -> IO [ProcessID]
+getDescendants rootPid = do
+  allPids <- getProcPids
+  ppidMap <- buildPPidMap allPids
+  return $ descendantsOf ppidMap rootPid
+
+-- Build map of pid -> ppid
+buildPPidMap :: [ProcessID] -> IO [(ProcessID, ProcessID)]
+buildPPidMap pids = do
+  pairs <- mapM (\p -> do mp <- getPPid p; return (p, mp)) pids
+  return [(p, pp) | (p, Just pp) <- pairs]
+
+descendantsOf :: [(ProcessID, ProcessID)] -> ProcessID -> [ProcessID]
+descendantsOf ppidMap pid =
+  let cs = [p | (p, pp) <- ppidMap, pp == pid]
+  in cs ++ concatMap (descendantsOf ppidMap) cs
+
+-- Get all numeric PIDs from /proc
+getProcPids :: IO [ProcessID]
+getProcPids = do
+  entries <- catch (listDirectory "/proc") (\(_ :: SomeException) -> return [])
+  return [fromIntegral (read e :: Int) | e <- entries, not (null e), all (`elem` ("0123456789" :: String)) e]
+
+-- Get the parent PID from /proc/<pid>/stat
+-- Format: <pid> (<comm>) <state> <ppid> ...
+-- comm can contain spaces and parens, so find last ')' first
+getPPid :: ProcessID -> IO (Maybe ProcessID)
+getPPid pid = catch readPPid (\(_ :: SomeException) -> return Nothing)
+  where
+    readPPid = do
+      content <- withFile ("/proc/" ++ show (fromIntegral pid :: Int) ++ "/stat") ReadMode $ \h -> do
+        c <- System.IO.hGetContents h
+        length c `seq` return c  -- force full read
+      -- Find position after the last ')'
+      let afterComm = drop 1 $ dropWhile (/= ')') content
+          fields = words afterComm  -- state, ppid, ...
+      case fields of
+        (_state:ppidStr:_) -> return $ Just (fromIntegral (read ppidStr :: Int))
+        _ -> return Nothing
+
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: Int -> String -> [Target] -> IO()
 mainTop numJobs progName targets = do
   -- Setup cache and job server for first run:
   initializeSession
   handle <- initializeJobServer numJobs
+  myPid <- getProcessID
 
+  -- Wrap the entire build in a handler that catches UserInterrupt (Ctrl+C)
+  -- GHC converts SIGINT to UserInterrupt async exception, so we catch that
+  catch (mainTopInner handle progName targets)
+        (\(e :: SomeException) -> do
+          let isInterrupt = show e == "user interrupt"
+          when isInterrupt $ do
+            -- Kill all descendants
+            killDescendants myPid sigINT
+            threadDelay 200000
+            killPass myPid 9
+          -- Clean up
+          clearJobServer handle
+          clearRedoTempDirectory
+          if isInterrupt
+            then exitImmediately (ExitFailure 130)
+            else throw e
+        )
+
+mainTopInner :: JobServerHandle -> String -> [Target] -> IO()
+mainTopInner handle progName targets = do
   -- Perform the proper action based on the program name:
   case progName of
     "redo" -> exitWith' handle =<< redo targets'
