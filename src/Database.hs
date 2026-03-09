@@ -17,7 +17,8 @@ import System.Directory (getAppUserDataDirectory, getTemporaryDirectory, doesDir
 import System.FileLock (SharedExclusive(..), withFileLock)
 import System.FilePath ((</>))
 import System.Exit (exitFailure)
-import System.Environment (getEnv, setEnv)
+import System.Environment (getEnv, setEnv, lookupEnv)
+import System.Posix.User (getEffectiveUserID)
 import System.Random (randomRIO)
 
 import DatabaseEntry
@@ -39,10 +40,18 @@ redoMetaDirectory :: IO FilePath
 redoMetaDirectory = getAppUserDataDirectory "redo"
 
 getUsername :: IO String
-getUsername = catch (getEnv "USERNAME")
-                (\(_ :: SomeException) -> catch (getEnv "USER")
-                  (\(_ :: SomeException) -> getEnv "REDO_SESSION" )
-                )
+getUsername = do
+  mUsername <- lookupEnv "USERNAME"
+  case mUsername of
+    Just u | not (null u) -> return u
+    _ -> do
+      mUser <- lookupEnv "USER"
+      case mUser of
+        Just u | not (null u) -> return u
+        _ -> do
+          -- Fallback to UID which acts like $USERNAME or $USER
+          -- if neither exist.
+          show <$> getEffectiveUserID
 
 -- Directory for storing temporary data:
 redoTempDirectory :: IO FilePath
