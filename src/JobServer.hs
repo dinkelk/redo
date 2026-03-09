@@ -4,7 +4,7 @@ module JobServer (initializeJobServer, getJobServer, clearJobServer, runJobs, Jo
                   waitOnJob, runJob, tryWaitOnJob, returnToken, getToken, Token(..)) where
 
 import Control.Exception.Base (assert)
-import Control.Exception (catch, SomeException(..))
+import Control.Exception (catch, SomeException(..), onException)
 import Foreign.C.Types (CInt)
 import System.Environment (getEnv, setEnv)
 import System.Exit (ExitCode(..))
@@ -18,6 +18,9 @@ import Control.Monad (void)
 import qualified Data.ByteString.Char8 as BS
 
 import Database
+
+-- C-level signal reset for forked children
+foreign import ccall "reset_signal_handlers" resetSignalHandlers :: IO ()
 
 newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd, Fd) }
 newtype Token = Token { unToken :: Char } deriving stock (Eq, Show)
@@ -127,9 +130,15 @@ runJob handle j = bool runJob' forkJob =<< tryGetToken handle
     runJob' = Right <$> j
 
 -- Run a job and then return the token associated with it.
+-- Always return the token, even if the job fails or is interrupted.
 runForkedJob :: JobServerHandle -> IO ExitCode -> IO ()
 runForkedJob handle job = do
-  _ <- job
+  -- Reset signal handlers to default in forked children.
+  -- The parent's SIGINT handler does process-group-wide SIGKILL;
+  -- if forked children inherit it, the child's handler may fire first
+  -- and kill the parent before the parent's handler gets to run.
+  resetSignalHandlers
+  _ <- job `onException` returnToken handle
   returnToken handle
 
 -- Wait on job to finish, and return the exit code when it does:

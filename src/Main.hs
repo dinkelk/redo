@@ -19,6 +19,12 @@ import Types
 import Version
 import FilePathUtil
 
+-- C-level signal handler that SIGKILL's the entire process group on SIGINT/SIGTERM.
+-- We use C-level sigaction instead of GHC's installHandler because GHC's RTS
+-- intercepts signals through its own machinery, which may not fire when the
+-- main thread is blocked in a foreign call (waitpid).
+foreign import ccall "install_kill_group_handler" installKillGroupHandler :: IO ()
+
 -- Redo options:
 data Options = Options {
   help :: Bool,
@@ -205,6 +211,15 @@ mainTop numJobs progName targets = do
   initializeSession
   handle <- initializeJobServer numJobs
 
+  -- Install C-level signal handler for clean shutdown on Ctrl+C / SIGTERM.
+  -- Uses raw sigaction to bypass GHC's RTS signal machinery, which may not
+  -- deliver signals when the main thread is blocked in foreign calls (waitpid).
+  -- The handler simply SIGKILL's the entire process group.
+  installKillGroupHandler
+  mainTopInner handle progName targets
+
+mainTopInner :: JobServerHandle -> String -> [Target] -> IO()
+mainTopInner handle progName targets = do
   -- Perform the proper action based on the program name:
   case progName of
     "redo" -> exitWith' handle =<< redo targets'
@@ -224,7 +239,7 @@ mainTop numJobs progName targets = do
     runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
                                    exitFailure
     -- Clear out any temp files from this session
-    exitWith' handle code = clearJobServer handle >> clearRedoTempDirectory >> exitWith code
+    exitWith' h code = clearJobServer h >> clearRedoTempDirectory >> exitWith code
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()

@@ -5,7 +5,7 @@ module Build(redo, redoIfChange, redoOutOfDate, redoDone, isRunFromDoFile, store
 
 -- System imports:
 import Control.Monad (when, unless)
-import Control.Exception (catch, SomeException(..), displayException)
+import Control.Exception (catch, SomeException(..), displayException, onException)
 import Data.Either (rights, lefts, isRight)
 import Data.Map.Lazy (adjust, insert, fromList, toList)
 import Data.Maybe (isJust, isNothing, fromJust, fromMaybe)
@@ -16,7 +16,7 @@ import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
-import System.Process (createProcess, waitForProcess, shell, CreateProcess(..))
+import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), terminateProcess, ProcessHandle)
 import System.Posix.Types (ProcessID)
 
 -- Local imports:
@@ -410,7 +410,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_SHELL_ARGS" shellArgs
                       $ fromList oldEnv
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
-  exit <- waitForProcess processHandle
+  -- If we're interrupted while waiting, terminate the child process group
+  exit <- waitForProcess processHandle `onException` cleanupChild processHandle
   case exit of
     ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory
                       -- If the target exists, then store the target stamp
@@ -560,6 +561,10 @@ shellCmd shellArgs doFile target tmp3 tmpStdout = do
       where
         readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
+
+-- Terminate a child process and its process group on cleanup:
+cleanupChild :: ProcessHandle -> IO ()
+cleanupChild ph = catch (terminateProcess ph) (\(_ :: SomeException) -> return ())
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()
