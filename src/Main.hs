@@ -17,6 +17,7 @@ import PrettyPrint
 import Build
 import Types
 import Version
+import FilePathUtil
 
 -- Redo options:
 data Options = Options {
@@ -105,11 +106,16 @@ printVersion _ = do putStrLn versionString
                     exitSuccess
 
 -- Print the program's help details:
+-- Canonical usage line per command:
+usageLine :: String -> String
+usageLine "redo-done" = "usage: redo-done [OPTION...] target [dep ...]"
+usageLine name        = "usage: " ++ name ++ " [OPTION...] target..."
+
 printHelp :: String -> [OptDescr a] -> [String] -> IO b
 printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts
                                                        exitSuccess
                                                else ioError (userError (concat errs ++ helpStr opts))
-  where helpStr = usageInfo $ "Usage: " ++ programName ++ " [OPTION...] targets..."
+  where helpStr = usageInfo (usageLine programName)
 
 -- Helper function to get parse through commandline arguments and return options:
 getOptions :: IO (Options, [String])
@@ -184,6 +190,14 @@ main = do
     mainToRun numJobs = do runFromDoFile <- isRunFromDoFile
                            return $ if runFromDoFile then mainDo else mainTop numJobs
 
+parseRedoDoneArgs :: [Target] -> IO (Target, [Target])
+parseRedoDoneArgs args =
+  case args of
+    [] -> do putWarningStrLn $ usageLine "redo-done"
+             exitFailure
+    (t:deps) -> do absTarget <- Target <$> canonicalizePath' (unTarget t)
+                   return (absTarget, deps)
+
 -- The main function for redo run at a top level (outside of a .do file)
 mainTop :: Int -> String -> [Target] -> IO()
 mainTop numJobs progName targets = do
@@ -196,6 +210,8 @@ mainTop numJobs progName targets = do
     "redo" -> exitWith' handle =<< redo targets'
     "redo-ifchange" -> exitWith' handle =<< redoIfChange targets
     "redo-ood" -> exitWith' handle =<< redoOutOfDate targets
+    "redo-done" -> do (target, deps) <- parseRedoDoneArgs targets
+                      exitWith' handle =<< redoDone target deps
     -- redo-ifcreate and redo-always should only be run inside of a .do file
     "redo-ifcreate" -> runOutsideDoError progName
     "redo-always" -> runOutsideDoError progName
@@ -220,6 +236,11 @@ mainDo progName targets =
                           storeIfChangeDependencies targets
                           exitWith exitCode
     "redo-ood" -> exitWith =<< redoOutOfDate targets
+    "redo-done" -> do (target, deps) <- parseRedoDoneArgs targets
+                      exitCode <- redoDone target deps
+                      -- Also store as a dependency of the parent if run inside a .do file
+                      storeIfChangeDependencies [target]
+                      exitWith exitCode
     "redo-ifcreate" -> storeIfCreateDependencies targets
     "redo-always" -> storeAlwaysDependency
     _ -> return ()
