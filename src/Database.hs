@@ -82,11 +82,14 @@ redoCacheDirectory = do
   root <- redoTempDirectory
   return $ root </> "cache"
 
--- Directory for storing target file locks to syncronize parallel builds of targets
+-- Directory for storing target file locks to synchronize parallel builds of targets
+-- Uses persistent directory (~/.redo/locks/) so locks work across separate redo sessions
 redoTargetLockFileDirectory :: IO FilePath
 redoTargetLockFileDirectory = do
-  root <- redoTempDirectory
-  return $ root </> "target_locks"
+  root <- redoMetaDirectory
+  let dir = root </> "locks"
+  safeCreateDirectoryRecursive dir
+  return dir
 
 -- Directory for storing database file locks to syncronize parallel database access
 redoDatabaseLockFileDirectory :: IO FilePath
