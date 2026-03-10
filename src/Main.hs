@@ -239,7 +239,7 @@ mainTopInner handle progName targets = do
     runOutsideDoError program = do putWarningStrLn $ "Warning: '" ++ program ++ "' can only be invoked inside of a .do file."
                                    exitFailure
     -- Clear out any temp files from this session
-    exitWith' h code = clearJobServer h >> clearRedoTempDirectory >> exitWith code
+    exitWith' h code = clearJobServer h >> closeDatabase >> clearRedoTempDirectory >> exitWith code
 
 -- The main function for redo run within a .do file
 mainDo :: String -> [Target] -> IO ()
