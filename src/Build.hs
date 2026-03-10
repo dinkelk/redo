@@ -409,6 +409,8 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs
                       $ fromList oldEnv
+  -- Release any SQLite read locks before forking to avoid blocking children
+  releaseDbLocks
   (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
   -- If we're interrupted while waiting, terminate the child process group
   exit <- waitForProcess processHandle `onException` cleanupChild processHandle
