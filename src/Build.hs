@@ -167,7 +167,6 @@ redoOutOfDate = buildTargets redoOutOfDate'
 -- stores the given dependencies, and stamps the target.
 redoDone :: Target -> [Target] -> IO ExitCode
 redoDone target deps = do
-  putRedoInfo target
   let key = getKey target
   let tempKey = getTempKey target
   -- Verify the target exists on disk
@@ -175,32 +174,44 @@ redoDone target deps = do
   unless exists $ do
     putErrorStrLn $ "Error: redo-done target '" ++ unTarget target ++ "' does not exist on disk."
     exitFailure
-  -- Look up the existing .do file for this target (option b)
+  -- Look up the existing .do file for this target
   maybeDoFile <- findDoFile target
   case maybeDoFile of
     Nothing -> do
       putErrorStrLn $ "Error: No .do file found for target '" ++ unTarget target ++ "'."
       exitFailure
     Just doFile -> do
-      -- Initialize the target database with the .do file (this refreshes deps)
-      initializeTargetDatabase key doFile
-      -- Initialize the .do file itself as a source (redo tracks .do files as deps)
-      let doFileTarget = Target (unDoFile doFile)
-      let doFileKey = getKey doFileTarget
-      initializeSourceDatabase doFileKey doFileTarget
-      -- Canonicalize and store all dependencies
-      parentRedoPath <- getCurrentDirectory
-      canonicalizedDeps <- mapM (canonicalize parentRedoPath) deps
-      mapM_ (storeIfChangeDep key) canonicalizedDeps
-      -- For each dep that is a source file (not a redo target), initialize
-      -- its source database so redo recognizes it as a known source.
-      mapM_ initializeSourceIfNeeded canonicalizedDeps
-      -- Stamp the target with current mtime
-      stamp <- stampTarget target
-      storeStamp key stamp
-      -- Mark as built in the session cache
-      markBuilt tempKey
-      return ExitSuccess
+      -- Early exit: if target stamp is unchanged and DB already exists with
+      -- the same dofile, skip the expensive DB refresh. This makes no-op
+      -- rebuilds fast when redo-done is called for many targets.
+      currentStamp <- safeStampTarget target
+      cachedStamp <- getStamp key
+      cachedDoFile <- getDoFile key
+      if currentStamp == cachedStamp && cachedDoFile == Just doFile then do
+        -- Target hasn't changed since last build — just mark built in session cache
+        markBuilt tempKey
+        return ExitSuccess
+      else do
+        putRedoInfo target
+        -- Initialize the target database with the .do file (this refreshes deps)
+        initializeTargetDatabase key doFile
+        -- Initialize the .do file itself as a source (redo tracks .do files as deps)
+        let doFileTarget = Target (unDoFile doFile)
+        let doFileKey = getKey doFileTarget
+        initializeSourceDatabase doFileKey doFileTarget
+        -- Canonicalize and store all dependencies
+        parentRedoPath <- getCurrentDirectory
+        canonicalizedDeps <- mapM (canonicalize parentRedoPath) deps
+        mapM_ (storeIfChangeDep key) canonicalizedDeps
+        -- For each dep that is a source file (not a redo target), initialize
+        -- its source database so redo recognizes it as a known source.
+        mapM_ initializeSourceIfNeeded canonicalizedDeps
+        -- Stamp the target with current mtime
+        stamp <- stampTarget target
+        storeStamp key stamp
+        -- Mark as built in the session cache
+        markBuilt tempKey
+        return ExitSuccess
   where
     canonicalize path dep = do cpath <- canonicalizePath' $ path </> unTarget dep
                                return $ Target cpath
