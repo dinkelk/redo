@@ -82,17 +82,25 @@ redoCacheDirectory = do
   root <- redoTempDirectory
   return $ root </> "cache"
 
--- Directory for storing target file locks to syncronize parallel builds of targets
+-- Directory for storing target file locks to synchronize parallel builds of targets.
+-- Uses a global directory so locks work across separate redo sessions.
 redoTargetLockFileDirectory :: IO FilePath
 redoTargetLockFileDirectory = do
-  root <- redoTempDirectory
-  return $ root </> "target_locks"
+  user <- getUsername
+  base <- getTemporaryDirectory
+  let dir = base </> "redo-" ++ user ++ "-locks" </> "targets"
+  safeCreateDirectoryRecursive dir
+  return dir
 
--- Directory for storing database file locks to syncronize parallel database access
+-- Directory for storing database file locks to synchronize parallel database access.
+-- Uses a global directory so locks work across separate redo sessions.
 redoDatabaseLockFileDirectory :: IO FilePath
 redoDatabaseLockFileDirectory = do
-  root <- redoTempDirectory
-  return $ root </> "db_locks"
+  user <- getUsername
+  base <- getTemporaryDirectory
+  let dir = base </> "redo-" ++ user ++ "-locks" </> "db"
+  safeCreateDirectoryRecursive dir
+  return dir
 
 -- Directory for storing temporary target files to automically building redo files
 redoTempTargetDirectory :: IO FilePath
@@ -357,8 +365,6 @@ clearRedoTempDirectory = safeRemoveDirectoryRecursive =<< redoTempDirectory
 createRedoTempDirectory :: IO ()
 createRedoTempDirectory = do
   safeCreateDirectoryRecursive =<< redoCacheDirectory
-  safeCreateDirectoryRecursive =<< redoDatabaseLockFileDirectory
-  safeCreateDirectoryRecursive =<< redoTargetLockFileDirectory
   safeCreateDirectoryRecursive =<< redoTempTargetDirectory
   safeCreateDirectoryRecursive =<< redoStdoutTargetDirectory
 
