@@ -36,7 +36,8 @@ data Options = Options {
   keepGoing :: Bool,
   jobs :: Int,
   shuffle :: Bool,
-  noColor :: Bool
+  noColor :: Bool,
+  quiet :: Bool
 }
 
 -- Redo default options:
@@ -51,7 +52,8 @@ defaultOptions = Options {
   keepGoing = False,
   jobs = 1,
   shuffle = False,
-  noColor = False
+  noColor = False,
+  quiet = False
 }
 
 -- Define program options:
@@ -73,6 +75,7 @@ options =
   , Option ['k']      ["keep-going"]  (NoArg setKeepGoing)           "keep building even if some targets fail"
   , Option ['s']      ["shuffle"]     (NoArg setShuffle)             "randomize the build order to find dependency bugs"
   , Option ['n']      ["no-color"]    (NoArg setNoColor)             "print plain text, disable ANSI terminal color output"
+  , Option ['q']      ["quiet"]       (NoArg setQuiet)               "suppress all output except errors"
   ]
 
 -- Helper functions for setting the options:
@@ -105,6 +108,9 @@ setShuffle opt = return opt { shuffle = True }
 
 setNoColor :: Options -> IO Options
 setNoColor opt = return opt { noColor = True }
+
+setQuiet :: Options -> IO Options
+setQuiet opt = return opt { quiet = True }
 
 -- Print the program version and license information:
 printVersion :: Options -> IO Options
@@ -152,13 +158,15 @@ main = do
                 keepGoing = keepGoing',
                 jobs = jobs',
                 shuffle = shuffle',
-                noColor = noColor'} = opts
+                noColor = noColor',
+                quiet = quiet'} = opts
 
   -- Show help or version information if asked:
   when help' (printHelp progName options [])
   when keepGoing' (setEnv "REDO_KEEP_GOING" "TRUE")
   when shuffle' (setEnv "REDO_SHUFFLE" "TRUE")
   when noColor' (setEnv "REDO_NO_COLOR" "TRUE")
+  when quiet' (setEnv "REDO_QUIET" "TRUE")
   when dashD1' (setEnv "REDO_DEBUG_1" "TRUE")
   when dashD2' (setEnv "REDO_DEBUG_2" "TRUE")
   when dashC' (setEnv "REDO_CHECK" "TRUE")
