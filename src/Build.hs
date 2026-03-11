@@ -182,6 +182,8 @@ redoDone target deps = do
       putErrorStrLn $ "Error: No .do file found for target '" ++ unTarget target ++ "'."
       exitFailure
     Just doFile -> do
+      -- Get the old stamp before refreshing, so we can detect if the target changed
+      oldStamp <- getStamp key
       -- Initialize the target database with the .do file (this refreshes deps)
       initializeTargetDatabase key doFile
       -- Initialize the .do file itself as a source (redo tracks .do files as deps)
@@ -198,8 +200,13 @@ redoDone target deps = do
       -- Stamp the target with current mtime
       stamp <- stampTarget target
       storeStamp key stamp
-      -- Mark as built in the session cache
-      markBuilt tempKey
+      -- If the stamp hasn't changed, mark as clean (verified up-to-date).
+      -- If the stamp changed, mark as built (actually rebuilt, parents need updating).
+      -- Using markBuilt unconditionally would cause parents to rebuild even when
+      -- the target didn't change, because at level > 0 "built" means "newly built".
+      if Just stamp == oldStamp
+        then markClean tempKey
+        else markBuilt tempKey
       return ExitSuccess
   where
     canonicalize path dep = do cpath <- canonicalizePath' $ path </> unTarget dep
