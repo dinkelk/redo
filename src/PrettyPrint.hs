@@ -2,6 +2,7 @@
 module PrettyPrint(putRedoUnformatted, putRedoInfo, putRedoWarning, putInfoStrLn, putWarningStrLn, putErrorStrLn,
                    putStatusStrLn, putRedoStatus, putRedoError, putUnformattedStrLn, isColorTerminal, putStrBuffered) where
 
+import Control.Monad (unless)
 import System.IO (hPutStrLn, stderr, hFlush, hSetBuffering, BufferMode(..), stdout, hIsTerminalDevice)
 import Data.Maybe (fromJust, isNothing, isJust, fromMaybe)
 import System.Environment (lookupEnv)
@@ -51,13 +52,17 @@ putColorStrLn color string = do
 putUnformattedStrLn :: String -> IO ()
 putUnformattedStrLn = hPutStrLn stderr
 putInfoStrLn :: String -> IO ()
-putInfoStrLn = putColorStrLn green
+putInfoStrLn string = do
+  quiet' <- isQuiet
+  unless quiet' $ putColorStrLn green string
 putWarningStrLn :: String -> IO ()
 putWarningStrLn = putColorStrLn yellow
 putErrorStrLn :: String -> IO ()
 putErrorStrLn = putColorStrLn red
 putStatusStrLn :: String -> IO ()
-putStatusStrLn = putColorStrLn cyan
+putStatusStrLn string = do
+  quiet' <- isQuiet
+  unless quiet' $ putColorStrLn cyan string
 
 -- Print a "redo" style string. This includes the target being built, indented
 -- to the appropriate level, with an optional message ater
@@ -92,22 +97,34 @@ useColor = do
   let noColor = fromMaybe "" noColor'
   return $ noColor /= "TRUE"
 
+-- Is quiet mode enabled? (suppress info and status output; warnings and errors always print)
+isQuiet :: IO Bool
+isQuiet = do
+  quiet' <- lookupEnv "REDO_QUIET"
+  return $ fromMaybe "" quiet' == "TRUE"
+
 -- Put a "redo" style info string:
 putRedoInfo :: Target -> IO ()
-putRedoInfo target = putRedo green target ""
+putRedoInfo target = do
+  quiet' <- isQuiet
+  unless quiet' $ putRedo green target ""
 
 -- Put a "redo" style status string:
 putRedoStatus :: Target -> String -> IO ()
-putRedoStatus target string = putRedo cyan target ("- " ++ string)
+putRedoStatus target string = do
+  quiet' <- isQuiet
+  unless quiet' $ putRedo cyan target ("- " ++ string)
 
--- Put a "redo" style warning string:
+-- Put a "redo" style warning string (always printed, even in quiet mode):
 putRedoWarning :: Target -> String -> IO ()
 putRedoWarning target string = putRedo yellow target ("- " ++ string)
 
--- Put a "redo" style error string:
+-- Put a "redo" style error string (always printed, even in quiet mode):
 putRedoError :: Target -> String -> IO ()
 putRedoError target string = putRedo red target ("- " ++ string)
 
 -- Put a "redo" style unformatted string:
 putRedoUnformatted :: Target -> String -> IO ()
-putRedoUnformatted target string = putRedo "" target ("- " ++ string)
+putRedoUnformatted target string = do
+  quiet' <- isQuiet
+  unless quiet' $ putRedo "" target ("- " ++ string)
