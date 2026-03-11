@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Haskell Stack
         uses: haskell-actions/setup@v2
@@ -22,7 +22,7 @@ jobs:
           stack-version: 'latest'
 
       - name: Cache Stack dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.stack
@@ -48,7 +48,7 @@ jobs:
           redo test/all
 
       - name: Archive redo binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: redo_bin
           path: ${{ github.workspace }}/bin
