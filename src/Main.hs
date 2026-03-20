@@ -121,13 +121,28 @@ printVersion _ = do putStrLn versionString
 -- Canonical usage line per command:
 usageLine :: String -> String
 usageLine "redo-done" = "usage: redo-done [OPTION...] target [dep ...]"
+usageLine "redo-reset" = "usage: redo-reset"
 usageLine name        = "usage: " ++ name ++ " [OPTION...] target..."
 
 printHelp :: String -> [OptDescr a] -> [String] -> IO b
-printHelp programName opts errs = if null errs then do putStrLn $ helpStr opts
+printHelp programName opts errs = if null errs then do putStr $ helpStr opts
+                                                       when (programName == "redo") $ putStr relatedCommands
+                                                       putStrLn ""
                                                        exitSuccess
                                                else ioError (userError (concat errs ++ helpStr opts))
   where helpStr = usageInfo (usageLine programName)
+
+relatedCommands :: String
+relatedCommands = unlines
+  [ ""
+  , "Related commands:"
+  , "  redo-ifchange    Rebuild targets only if dependencies changed"
+  , "  redo-ifcreate    Rebuild if a source file is created"
+  , "  redo-always      Always rebuild (mark target as never up-to-date)"
+  , "  redo-ood         List out-of-date targets"
+  , "  redo-done        Mark an external target as up-to-date"
+  , "  redo-reset       Remove all redo state and start fresh"
+  ]
 
 -- Helper function to get parse through commandline arguments and return options:
 getOptions :: IO (Options, [String])
@@ -188,6 +203,9 @@ main = do
   debug2Flag <- lookupEnv "REDO_DEBUG_2"
   let debug2 = fromMaybe "" debug2Flag
   unless (null debug2) (putUnformattedStrLn $ progName ++ " " ++ unwords (map unTarget targetsToRun') )
+
+  -- Handle redo-reset early, before session initialization
+  when (progName == "redo-reset") $ do redoReset >> exitSuccess
 
   -- Run the main:
   mainToRun' <- mainToRun jobs'
