@@ -5,9 +5,11 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  doesDatabaseExist, storeIfChangeDep, storeAlwaysDep, getBuiltTargetPath, isDirty,
                  initializeSourceDatabase, isClean, getDoFile, getStamp, isSource, getKey, getTempKey,
                  TempKey(..), Key(..), initializeSession, getTargetLockFile, getJobServerPipe,
-                 getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
+                 getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored,
+                 redoReset) where
 
 import Control.Exception (catch, SomeException(..))
+import Control.Monad (when)
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash (hashWith, MD5(..), Digest)
 import qualified Data.ByteArray
@@ -20,6 +22,8 @@ import System.Exit (exitFailure)
 import System.Environment (getEnv, setEnv, lookupEnv)
 import System.Posix.User (getEffectiveUserID)
 import System.Random (randomRIO)
+import System.Process (callProcess)
+import System.IO (hFlush, stdout)
 
 import DatabaseEntry
 import PrettyPrint
@@ -529,3 +533,35 @@ markDirty key = withDatabaseLock' key func
 -- Store a stamp for the target in the database:
 storeStamp :: Key -> Stamp -> IO ()
 storeStamp key stamp = withDatabaseLock key (storeStamp' key stamp)
+
+-- redoReset - remove all redo state
+redoReset :: IO ()
+redoReset = do
+  putStr "Resetting redo state... " >> hFlush stdout
+
+  -- Gather paths to remove
+  metaDir <- redoMetaDirectory
+  user <- getUsername
+  base <- getTemporaryDirectory
+  let lockDir = base </> "redo-" ++ user ++ "-locks"
+  let tempBaseDir = base </> "redo-" ++ user
+
+  -- Check existence
+  exists1 <- doesDirectoryExist metaDir
+  exists2 <- doesDirectoryExist lockDir
+  exists3 <- doesDirectoryExist tempBaseDir
+
+  if exists1 || exists2 || exists3
+    then do -- Fast bulk removal via rm -rf (faster than Haskell's
+            -- removeDirectoryRecursive which does per-file stat+unlink)
+            let dirs = [metaDir | exists1] ++ [lockDir | exists2] ++ [tempBaseDir | exists3]
+            catch (callProcess "rm" ("-rf" : dirs))
+                  (\(_ :: SomeException) ->
+                    -- Fallback to Haskell removal if rm not available
+                    mapM_ safeRemoveDirectoryRecursive dirs)
+            putStrLn "done."
+            when exists1 $ putStrLn $ "  Removed " ++ metaDir ++ " (build state)"
+            when exists2 $ putStrLn $ "  Removed " ++ lockDir ++ " (lock files)"
+            when exists3 $ putStrLn $ "  Removed " ++ tempBaseDir ++ " (temp/cache)"
+            putStrLn "Redo state reset. Next build will start fresh."
+    else putStrLn "nothing to reset. Redo state is already clean."

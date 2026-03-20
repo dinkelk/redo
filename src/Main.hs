@@ -121,6 +121,7 @@ printVersion _ = do putStrLn versionString
 -- Canonical usage line per command:
 usageLine :: String -> String
 usageLine "redo-done" = "usage: redo-done [OPTION...] target [dep ...]"
+usageLine "redo-reset" = "usage: redo-reset"
 usageLine name        = "usage: " ++ name ++ " [OPTION...] target..."
 
 printHelp :: String -> [OptDescr a] -> [String] -> IO b
@@ -188,6 +189,9 @@ main = do
   debug2Flag <- lookupEnv "REDO_DEBUG_2"
   let debug2 = fromMaybe "" debug2Flag
   unless (null debug2) (putUnformattedStrLn $ progName ++ " " ++ unwords (map unTarget targetsToRun') )
+
+  -- Handle redo-reset early, before session initialization
+  when (progName == "redo-reset") $ do redoReset >> exitSuccess
 
   -- Run the main:
   mainToRun' <- mainToRun jobs'
