@@ -120,8 +120,24 @@ redoIfChange = buildTargets redoIfChange'
       runFromDo <- isRunFromDoFile
       case (source, runFromDo) of
         (True, False) -> targetSourceWarning target
-        (True, True) -> do initializeSourceDatabase key target
-                           return ExitSuccess
+        -- Source file encountered from within a .do file. We need to ensure
+        -- the database is marked as source with a current stamp. However,
+        -- if the stamp hasn't changed since last time, we can skip the
+        -- expensive initializeSourceDatabase call (which deletes and recreates
+        -- the entire database directory). This is important because that
+        -- delete-recreate cycle opens a corruption window: if the process is
+        -- killed (e.g. Ctrl+C -> SIGKILL) between the delete and the
+        -- markSource write, the database is left without a source marker,
+        -- causing permanent "No rule to build" errors for the file.
+        -- By skipping unchanged sources, we eliminate this window for the
+        -- vast majority of source files on incremental builds.
+        (True, True) -> do
+          currentStamp <- safeStampTarget target
+          cachedStamp <- getStamp key
+          if currentStamp == cachedStamp
+            then return ExitSuccess
+            else do initializeSourceDatabase key target
+                    return ExitSuccess
         (False, _) -> do
           currentStamp <- safeStampTarget target
           modified <- isTargetModified key currentStamp
