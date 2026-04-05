@@ -8,6 +8,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
 
 import Control.Exception (catch, SomeException(..))
+import Control.Monad (when)
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash (hashWith, MD5(..), Digest)
 import qualified Data.ByteArray
@@ -377,7 +378,16 @@ createRedoTempDirectory = do
 -- dependencies hanging around if we are rebuilding a file.
 initializeTargetDatabase :: Key -> DoFile -> IO ()
 initializeTargetDatabase key doFile = withDatabaseLock key func
-  where func = do refreshDatabase key
+  where func = do -- Diagnostic: warn if we're about to overwrite a source-marked
+                  -- database. This should never happen during normal builds — it
+                  -- means a file that redo knows is a source is being treated as
+                  -- a build target. Logging this will help diagnose the root cause
+                  -- of "No rule to build" errors for source files.
+                  wasSource <- doesEntryExist =<< getSourceEntry key
+                  when wasSource $ putWarningStrLn $
+                    "Warning: initializeTargetDatabase is overwriting a source-marked database " ++
+                    "(do file: " ++ unDoFile doFile ++ "). This may corrupt redo state."
+                  refreshDatabase key
                   -- Write out .do script as dependency:
                   storeIfChangeDep' key (Target $ unDoFile doFile)
                   -- Cache the do file:
