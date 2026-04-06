@@ -15,12 +15,10 @@ import System.Posix.Process (forkProcess, getProcessStatus, ProcessStatus(..))
 import System.Posix.Files (createNamedPipe, ownerReadMode, ownerWriteMode, namedPipeMode, unionFileModes)
 import Data.Bool (bool)
 import Control.Monad (void)
+import Control.Concurrent (threadDelay)
 import qualified Data.ByteString.Char8 as BS
 
 import Database
-
--- C-level signal reset for forked children
-foreign import ccall "reset_signal_handlers" resetSignalHandlers :: IO ()
 
 newtype JobServerHandle = JobServerHandle { unJobServerHandle :: (Fd, Fd, Fd) }
 newtype Token = Token { unToken :: Char } deriving stock (Eq, Show)
@@ -107,8 +105,9 @@ runJobs handle (j:jobs) = bool runJob' forkJob =<< tryGetToken handle
       processId <- forkProcess $ runForkedJob handle j
       -- Run the rest of the jobs:
       rets <- runJobs handle jobs
+      -- Wait for forked child using interruptible polling:
       maybe (return $ ExitFailure 1 : rets) (returnExitCode rets)
-        =<< getProcessStatus True False processId
+        =<< waitOnJobStatus processId
     -- Run a job on the current process without forking:
     runJob' = do ret1 <- j
                  rets <- runJobs handle jobs
@@ -133,17 +132,28 @@ runJob handle j = bool runJob' forkJob =<< tryGetToken handle
 -- Always return the token, even if the job fails or is interrupted.
 runForkedJob :: JobServerHandle -> IO ExitCode -> IO ()
 runForkedJob handle job = do
-  -- Reset signal handlers to default in forked children.
-  -- The parent's SIGINT handler does process-group-wide SIGKILL;
-  -- if forked children inherit it, the child's handler may fire first
-  -- and kill the parent before the parent's handler gets to run.
-  resetSignalHandlers
   _ <- job `onException` returnToken handle
   returnToken handle
 
--- Wait on job to finish, and return the exit code when it does:
+-- Wait on job to finish, and return the exit code when it does.
+-- Uses a polling loop instead of blocking getProcessStatus so that
+-- GHC's RTS can deliver async exceptions (e.g. SIGINT) between polls.
 waitOnJob :: ProcessID -> IO ExitCode
-waitOnJob pid = maybe (ExitFailure 1) getExitCode <$> getProcessStatus True False pid
+waitOnJob pid = do
+  mStatus <- getProcessStatus False False pid
+  case mStatus of
+    Just status -> return $ getExitCode status
+    Nothing -> threadDelay 50000 >> waitOnJob pid
+
+-- Wait for a forked process using non-blocking polling, returning
+-- the raw ProcessStatus. Yields to the GHC RTS every 50ms so that
+-- async exceptions can be delivered.
+waitOnJobStatus :: ProcessID -> IO (Maybe ProcessStatus)
+waitOnJobStatus pid = do
+  mStatus <- getProcessStatus False False pid
+  case mStatus of
+    Just _ -> return mStatus
+    Nothing -> threadDelay 50000 >> waitOnJobStatus pid
 
 -- Return a job's exit code if it's finished, otherwise return Nothing.
 tryWaitOnJob :: ProcessID -> IO (Maybe ExitCode)

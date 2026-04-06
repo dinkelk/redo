@@ -19,11 +19,12 @@ import Types
 import Version
 import FilePathUtil
 
--- C-level signal handler that SIGKILL's the entire process group on SIGINT/SIGTERM.
--- We use C-level sigaction instead of GHC's installHandler because GHC's RTS
--- intercepts signals through its own machinery, which may not fire when the
--- main thread is blocked in a foreign call (waitpid).
-foreign import ccall "install_kill_group_handler" installKillGroupHandler :: IO ()
+-- Note: The C-level SIGKILL handler (installKillGroupHandler) has been
+-- removed. The hang it was solving (GHC RTS not delivering SIGINT while
+-- blocked in waitpid) is now fixed by using non-blocking polling loops
+-- (waitForProcessInterruptible, waitOnJob) instead of blocking waits.
+-- This allows GHC's default SIGINT handling (async exception to main
+-- thread) to work correctly, enabling clean shutdown without SIGKILL.
 
 -- Redo options:
 data Options = Options {
@@ -219,11 +220,6 @@ mainTop numJobs progName targets = do
   initializeSession
   handle <- initializeJobServer numJobs
 
-  -- Install C-level signal handler for clean shutdown on Ctrl+C / SIGTERM.
-  -- Uses raw sigaction to bypass GHC's RTS signal machinery, which may not
-  -- deliver signals when the main thread is blocked in foreign calls (waitpid).
-  -- The handler simply SIGKILL's the entire process group.
-  installKillGroupHandler
   mainTopInner handle progName targets
 
 mainTopInner :: JobServerHandle -> String -> [Target] -> IO()

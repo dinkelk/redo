@@ -16,8 +16,9 @@ import System.Exit (ExitCode(..), exitFailure)
 import System.FileLock (lockFile, tryLockFile, unlockFile, SharedExclusive(..), FileLock)
 import System.FilePath ((</>), takeDirectory, dropExtension, takeExtensions, takeFileName, dropExtensions)
 import System.IO (withFile, IOMode(..), hFileSize, hGetLine)
-import System.Process (createProcess, waitForProcess, shell, CreateProcess(..), terminateProcess, ProcessHandle)
+import System.Process (createProcess, shell, CreateProcess(..), terminateProcess, ProcessHandle, getProcessExitCode, interruptProcessGroupOf)
 import System.Posix.Types (ProcessID)
+import Control.Concurrent (threadDelay)
 
 -- Local imports:
 import Types
@@ -445,9 +446,12 @@ runDoFile key tempKey target currentTimeStamp doFile = do
                       $ insert "REDO_KEY" (keyToFilePath key)
                       $ insert "REDO_SHELL_ARGS" shellArgs
                       $ fromList oldEnv
-  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath}
-  -- If we're interrupted while waiting, terminate the child process group
-  exit <- waitForProcess processHandle `onException` cleanupChild processHandle
+  (_, _, _, processHandle) <- createProcess $ (shell cmd) {env = Just newEnv, cwd = Just redoPath, create_group = True}
+  -- Wait for the child using a polling loop instead of blocking waitForProcess.
+  -- This allows GHC's RTS to deliver async exceptions (e.g. from SIGINT)
+  -- between polls, preventing the hang that led to the SIGKILL handler.
+  -- On interruption, kill the child's process group to clean up.
+  exit <- waitForProcessInterruptible processHandle `onException` cleanupChild processHandle
   case exit of
     ExitSuccess -> do exitCode <- moveTempFiles tmp3 tmpStdout targetIsDirectory
                       -- If the target exists, then store the target stamp
@@ -598,9 +602,24 @@ shellCmd shellArgs doFile target tmp3 tmpStdout = do
         readFirstLine = catch (withFile (unDoFile file) ReadMode hGetLine) (\(_ :: SomeException) -> return "")
         extractShebang shebang = if take 2 shebang == "#!" then return $ drop 2 shebang else return $ "sh -e" ++ shellArgs
 
+-- Wait for a child process using a non-blocking polling loop.
+-- Unlike waitForProcess (which blocks in a foreign call to waitpid),
+-- this yields to the GHC RTS every 50ms, allowing async exceptions
+-- (e.g. UserInterrupt from SIGINT) to be delivered promptly.
+waitForProcessInterruptible :: ProcessHandle -> IO ExitCode
+waitForProcessInterruptible ph = do
+  mCode <- getProcessExitCode ph
+  case mCode of
+    Just code -> return code
+    Nothing -> threadDelay 50000 >> waitForProcessInterruptible ph
+
 -- Terminate a child process and its process group on cleanup:
 cleanupChild :: ProcessHandle -> IO ()
-cleanupChild ph = catch (terminateProcess ph) (\(_ :: SomeException) -> return ())
+cleanupChild ph = do
+  -- Try to kill the child's process group first (catches shell children),
+  -- then fall back to terminating just the child process.
+  catch (interruptProcessGroupOf ph) (\(_ :: SomeException) -> return ())
+  catch (terminateProcess ph) (\(_ :: SomeException) -> return ())
 
 -- Function to check if file exists, and if it does, remove it:
 safeRemoveTempFile :: FilePath -> IO ()
