@@ -8,6 +8,7 @@ module Database (clearRedoTempDirectory, initializeTargetDatabase, hasAlwaysDep,
                  getStdoutFile, getTempFile, markBuilt, isBuilt, markErrored, isErrored) where
 
 import Control.Exception (catch, SomeException(..))
+import Control.Monad (mapM_)
 import qualified Data.ByteString.Char8 as BS
 import Crypto.Hash (hashWith, MD5(..), Digest)
 import qualified Data.ByteArray
@@ -385,12 +386,26 @@ initializeTargetDatabase key doFile = withDatabaseLock key func
 
 initializeSourceDatabase :: Key -> Target -> IO ()
 initializeSourceDatabase key target = withDatabaseLock key func
-  where func = do refreshDatabase key
-                  -- Write out the source file stamp:
+  where func = do -- Crash-safe initialization: write the source marker FIRST,
+                  -- before any destructive operations. This ensures that if the
+                  -- process is killed at any point (e.g. Ctrl+C -> SIGKILL), the
+                  -- source marker always exists. Without this ordering, a kill
+                  -- between refreshDatabase and markSource leaves the database
+                  -- without a source marker, causing permanent "No rule to build"
+                  -- errors in projects with a catch-all default.do.
+                  createDatabase key
+                  markSource' key
+                  -- Clear any stale target entries that may remain from when
+                  -- this file was previously treated as a build target.
+                  -- These are harmless alongside "y" for isTargetSource, but
+                  -- isErrored is checked before isSource in upToDate, so stale
+                  -- "e" entries would cause unnecessary parent rebuilds.
+                  mapM_ (removeEntry =<<) [getDoFileEntry key, getErroredEntry key,
+                                           getIfChangeEntry key, getIfCreateEntry key,
+                                           getAlwaysEntry key, getPhonyTargetEntry key]
+                  -- Update the stamp:
                   stamp <- stampTarget target
                   storeStamp' key stamp
-                  -- Mark this target as source:
-                  markSource' key
 
 -- Get the database directory for a target:
 doesDatabaseExist :: Key -> IO Bool
